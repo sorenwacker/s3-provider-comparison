@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
+from openpyxl import Workbook, load_workbook
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
@@ -134,6 +135,70 @@ def save_results_csv(result: BenchmarkResult) -> Path:
         writer.writerows(rows)
 
     return csv_path
+
+
+def get_excel_path() -> Path:
+    """Get the Excel results file path."""
+    return get_results_dir() / "benchmarks.xlsx"
+
+
+def save_results_excel(result: BenchmarkResult) -> Path:
+    """Append benchmark results to Excel file."""
+    excel_path = get_excel_path()
+    machine_info = get_machine_info()
+
+    # Collect rows (same format as CSV)
+    rows = []
+    for provider_name, provider_result in result.provider_results.items():
+        if provider_name.endswith("_rclone"):
+            base_provider = provider_name[:-7]
+            method = "rclone"
+        else:
+            base_provider = provider_name
+            method = "sdk"
+
+        for size_bytes, size_result in provider_result.size_results.items():
+            base = {
+                "date": result.timestamp.strftime("%Y-%m-%d"),
+                "timestamp": result.timestamp.isoformat(),
+                "hostname": machine_info["hostname"],
+                "ip_address": machine_info["ip_address"],
+                "provider": base_provider,
+                "method": method,
+                "size_bytes": size_result.size_bytes,
+                "size_label": size_result.size_label,
+            }
+            for i, val in enumerate(size_result.upload_throughputs, 1):
+                rows.append({**base, "iteration": i, "metric": "upload_mbps", "value": round(val, 3)})
+            for i, val in enumerate(size_result.download_throughputs, 1):
+                rows.append({**base, "iteration": i, "metric": "download_mbps", "value": round(val, 3)})
+            for i, val in enumerate(size_result.latencies, 1):
+                rows.append({**base, "iteration": i, "metric": "latency_sec", "value": round(val, 6)})
+
+    if not rows:
+        return excel_path
+
+    fieldnames = [
+        "date", "timestamp", "hostname", "ip_address", "provider", "method",
+        "size_bytes", "size_label", "iteration", "metric", "value"
+    ]
+
+    # Load existing or create new workbook
+    if excel_path.exists():
+        wb = load_workbook(excel_path)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Benchmarks"
+        ws.append(fieldnames)
+
+    # Append rows
+    for row in rows:
+        ws.append([row[f] for f in fieldnames])
+
+    wb.save(excel_path)
+    return excel_path
 
 
 app = typer.Typer(help="S3 Provider Benchmark Tool")
@@ -368,8 +433,10 @@ def run(
     # Save and display results
     results_file = save_results(result)
     csv_file = save_results_csv(result)
+    excel_file = save_results_excel(result)
     console.print(f"\nResults saved to: [dim]{results_file}[/]")
-    console.print(f"CSV appended to: [dim]{csv_file}[/]\n")
+    console.print(f"CSV appended to: [dim]{csv_file}[/]")
+    console.print(f"Excel appended to: [dim]{excel_file}[/]\n")
     _display_results(result, categories)
 
 
