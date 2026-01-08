@@ -480,8 +480,13 @@ def test_sts_credentials(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
     except Exception as e:
         error_str = str(e).lower()
-        if any(x in error_str for x in ["not implemented", "sts", "accessdenied", "not authorized"]):
-            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, str(e)[:100])
+        # STS not supported by most S3-compatible providers
+        sts_errors = [
+            "not implemented", "invalidaction", "unknown", "accessdenied",
+            "not authorized", "getfederationtoken", "nosuchaction", "forbidden"
+        ]
+        if any(x in error_str for x in sts_errors):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "STS not supported")
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
 
 
@@ -524,8 +529,13 @@ def test_prefix_policy(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
     except Exception as e:
         error_str = str(e).lower()
-        if any(x in error_str for x in ["not implemented", "sts", "accessdenied"]):
-            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, str(e)[:100])
+        # STS not supported by most S3-compatible providers
+        sts_errors = [
+            "not implemented", "invalidaction", "unknown", "accessdenied",
+            "not authorized", "getfederationtoken", "nosuchaction", "forbidden"
+        ]
+        if any(x in error_str for x in sts_errors):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "STS not supported")
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
 
 

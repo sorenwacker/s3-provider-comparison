@@ -110,6 +110,13 @@ resource "aws_iam_user_policy" "s3bench" {
           aws_s3_bucket.benchmark.arn,
           "${aws_s3_bucket.benchmark.arn}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sts:GetFederationToken"
+        ]
+        Resource = "*"
       }
     ]
   })
