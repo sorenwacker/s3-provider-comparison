@@ -840,6 +840,57 @@ def results(
     console.print(f"\nResults stored in: [dim]{results_dir}[/]")
 
 
+def _save_features_excel(all_results: dict) -> Path:
+    """Save feature test results to Excel."""
+    from datetime import datetime
+
+    excel_path = get_results_dir() / "features.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Features"
+
+    # Get all feature names
+    feature_names = set()
+    for provider_results in all_results.values():
+        feature_names.update(provider_results.results.keys())
+    feature_names = sorted(feature_names)
+
+    provider_names = list(all_results.keys())
+
+    # Header row
+    ws.append(["Feature"] + provider_names)
+
+    # Data rows
+    for feature in feature_names:
+        row = [feature]
+        for provider in provider_names:
+            pr = all_results.get(provider)
+            if pr:
+                result = pr.results.get(feature)
+                if result:
+                    if result.status.value == "supported":
+                        row.append("Yes")
+                    elif result.status.value == "not_supported":
+                        row.append("No")
+                    elif result.status.value == "not_applicable":
+                        row.append("N/A")
+                    else:
+                        row.append("Error")
+                else:
+                    row.append("-")
+            else:
+                row.append("-")
+        ws.append(row)
+
+    # Add timestamp
+    ws.append([])
+    ws.append(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+
+    wb.save(excel_path)
+    return excel_path
+
+
 @app.command("features")
 def features(
     providers: Annotated[
@@ -910,6 +961,9 @@ def features(
             all_results[provider.name] = results
             progress.update(task, description=f"{provider.name}: Done")
 
+    # Save to Excel
+    excel_path = _save_features_excel(all_results)
+
     # Output results
     if output_json:
         json_output = {}
@@ -924,6 +978,8 @@ def features(
         console.print(json.dumps(json_output, indent=2))
     else:
         _display_feature_results(all_results)
+
+    console.print(f"\nResults saved to: [dim]{excel_path}[/]")
 
 
 def _display_feature_results(all_results: dict) -> None:
