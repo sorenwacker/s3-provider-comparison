@@ -1,0 +1,10 @@
+# Copy this file to terraform.tfvars and customize as needed
+
+storage_account_prefix = "s3bench"
+container_name         = "benchmark"
+location               = "westeurope"
+
+tags = {
+  Project   = "s3bench"
+  ManagedBy = "terraform"
+}

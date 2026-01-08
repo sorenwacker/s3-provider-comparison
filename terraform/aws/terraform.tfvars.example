@@ -1,0 +1,9 @@
+# Copy this file to terraform.tfvars and customize as needed
+
+bucket_name_prefix = "s3bench"
+region             = "eu-west-1"
+
+tags = {
+  Project   = "s3bench"
+  ManagedBy = "terraform"
+}
