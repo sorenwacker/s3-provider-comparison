@@ -143,7 +143,7 @@ def get_excel_path() -> Path:
 
 
 def save_results_excel(result: BenchmarkResult) -> Path:
-    """Append benchmark results to Excel file."""
+    """Append benchmark results to Excel file (raw data)."""
     excel_path = get_excel_path()
     machine_info = get_machine_info()
 
@@ -196,6 +196,168 @@ def save_results_excel(result: BenchmarkResult) -> Path:
     # Append rows
     for row in rows:
         ws.append([row[f] for f in fieldnames])
+
+    wb.save(excel_path)
+    return excel_path
+
+
+def save_full_report_excel(
+    benchmark_result: BenchmarkResult,
+    feature_results: dict = None,
+    filename: str = None
+) -> Path:
+    """Save comprehensive Excel report with multiple sheets."""
+    from s3bench.benchmark import get_sizes_for_category
+
+    machine_info = get_machine_info()
+    date_str = benchmark_result.timestamp.strftime("%y%m%d")
+
+    if filename:
+        excel_path = get_results_dir() / filename
+    else:
+        excel_path = get_results_dir() / f"{date_str}-s3bench-results.xlsx"
+
+    wb = Workbook()
+
+    # Sheet 1: Summary info
+    ws_info = wb.active
+    ws_info.title = "Info"
+    ws_info.append(["S3 Benchmark Report"])
+    ws_info.append(["Date", benchmark_result.timestamp.strftime("%Y-%m-%d")])
+    ws_info.append(["Time", benchmark_result.timestamp.strftime("%H:%M:%S")])
+    ws_info.append(["Hostname", machine_info["hostname"]])
+    ws_info.append(["IP Address", machine_info["ip_address"]])
+    ws_info.append(["Providers", ", ".join(benchmark_result.provider_results.keys())])
+
+    # Get all providers and sizes
+    providers = list(benchmark_result.provider_results.keys())
+    all_sizes = []
+    for cat in ["small", "medium", "large"]:
+        all_sizes.extend(get_sizes_for_category(cat))
+
+    # Sheet 2: Upload Throughput
+    ws_upload = wb.create_sheet("Upload (MB/s)")
+    ws_upload.append(["Size"] + providers)
+    for size in all_sizes:
+        row = [size.name.replace("_", " ")]
+        for provider in providers:
+            pr = benchmark_result.provider_results.get(provider)
+            if pr:
+                sr = pr.size_results.get(size.value)
+                if sr and sr.upload_throughputs:
+                    row.append(round(sr.avg_upload_throughput, 2))
+                else:
+                    row.append("-")
+            else:
+                row.append("-")
+        ws_upload.append(row)
+
+    # Sheet 3: Download Throughput
+    ws_download = wb.create_sheet("Download (MB/s)")
+    ws_download.append(["Size"] + providers)
+    for size in all_sizes:
+        row = [size.name.replace("_", " ")]
+        for provider in providers:
+            pr = benchmark_result.provider_results.get(provider)
+            if pr:
+                sr = pr.size_results.get(size.value)
+                if sr and sr.download_throughputs:
+                    row.append(round(sr.avg_download_throughput, 2))
+                else:
+                    row.append("-")
+            else:
+                row.append("-")
+        ws_download.append(row)
+
+    # Sheet 4: Latency
+    ws_latency = wb.create_sheet("Latency (sec)")
+    ws_latency.append(["Size"] + providers)
+    for size in all_sizes:
+        row = [size.name.replace("_", " ")]
+        for provider in providers:
+            pr = benchmark_result.provider_results.get(provider)
+            if pr:
+                sr = pr.size_results.get(size.value)
+                if sr and sr.latencies:
+                    row.append(round(sr.avg_latency, 4))
+                else:
+                    row.append("-")
+            else:
+                row.append("-")
+        ws_latency.append(row)
+
+    # Sheet 5: Feature Matrix (if provided)
+    if feature_results:
+        ws_features = wb.create_sheet("Features")
+        feature_providers = list(feature_results.keys())
+        # Get all feature names
+        feature_names = set()
+        for pr in feature_results.values():
+            feature_names.update(pr.results.keys())
+        feature_names = sorted(feature_names)
+
+        ws_features.append(["Feature"] + feature_providers)
+        for feature in feature_names:
+            row = [feature]
+            for provider in feature_providers:
+                pr = feature_results.get(provider)
+                if pr:
+                    result = pr.results.get(feature)
+                    if result:
+                        if result.status.value == "supported":
+                            row.append("Yes")
+                        elif result.status.value == "not_supported":
+                            row.append("No")
+                        elif result.status.value == "not_applicable":
+                            row.append("N/A")
+                        else:
+                            row.append("Error")
+                    else:
+                        row.append("-")
+                else:
+                    row.append("-")
+            ws_features.append(row)
+
+    # Sheet 6: Raw Data
+    ws_raw = wb.create_sheet("Raw Data")
+    fieldnames = [
+        "date", "timestamp", "hostname", "ip_address", "provider", "method",
+        "size_bytes", "size_label", "iteration", "metric", "value"
+    ]
+    ws_raw.append(fieldnames)
+
+    for provider_name, provider_result in benchmark_result.provider_results.items():
+        if provider_name.endswith("_rclone"):
+            base_provider = provider_name[:-7]
+            method = "rclone"
+        else:
+            base_provider = provider_name
+            method = "sdk"
+
+        for size_bytes, size_result in provider_result.size_results.items():
+            base_row = [
+                benchmark_result.timestamp.strftime("%Y-%m-%d"),
+                benchmark_result.timestamp.isoformat(),
+                machine_info["hostname"],
+                machine_info["ip_address"],
+                base_provider,
+                method,
+                size_result.size_bytes,
+                size_result.size_label,
+            ]
+            for i, val in enumerate(size_result.upload_throughputs, 1):
+                ws_raw.append(base_row + [i, "upload_mbps", round(val, 3)])
+            for i, val in enumerate(size_result.download_throughputs, 1):
+                ws_raw.append(base_row + [i, "download_mbps", round(val, 3)])
+            for i, val in enumerate(size_result.latencies, 1):
+                ws_raw.append(base_row + [i, "latency_sec", round(val, 6)])
+
+    # Sheet 7: Errors
+    ws_errors = wb.create_sheet("Errors")
+    ws_errors.append(["Provider", "Error"])
+    for provider_name, provider_result in benchmark_result.provider_results.items():
+        for error in provider_result.errors:
+            ws_errors.append([provider_name, error])
 
     wb.save(excel_path)
     return excel_path
@@ -675,6 +837,156 @@ def _display_feature_results(all_results: dict) -> None:
                     console.print("\n[bold yellow]Errors:[/]")
                     has_errors = True
                 console.print(f"  {provider_name}/{feature_name}: {result.message}")
+
+
+@app.command("report")
+def report(
+    providers: Annotated[
+        Optional[list[str]],
+        typer.Option("--provider", "-p", help="Provider(s) to test"),
+    ] = None,
+    all_providers: Annotated[
+        bool, typer.Option("--all", "-a", help="Test all providers")
+    ] = False,
+    sizes: Annotated[
+        str, typer.Option("--sizes", "-s", help="Size categories: small,medium,large")
+    ] = "small,medium,large",
+    small_iter: Annotated[
+        int, typer.Option("--small-iter", help="Iterations for small files")
+    ] = DEFAULT_ITERATIONS["small"],
+    medium_iter: Annotated[
+        int, typer.Option("--medium-iter", help="Iterations for medium files")
+    ] = DEFAULT_ITERATIONS["medium"],
+    large_iter: Annotated[
+        int, typer.Option("--large-iter", help="Iterations for large files")
+    ] = DEFAULT_ITERATIONS["large"],
+    method: Annotated[
+        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, or both")
+    ] = "both",
+    output: Annotated[
+        Optional[str], typer.Option("--output", "-o", help="Output filename (default: YYMMDD-s3bench-results.xlsx)")
+    ] = None,
+) -> None:
+    """Run full report: benchmarks + features → Excel."""
+    config = cfg.load_config()
+
+    if not config.providers:
+        console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
+        raise typer.Exit(1)
+
+    # Validate method
+    valid_methods = {"sdk", "rclone", "both"}
+    if method not in valid_methods:
+        console.print(f"Invalid method: {method}. Use: sdk, rclone, or both", style="red")
+        raise typer.Exit(1)
+
+    # Check rclone if needed
+    if method in ("rclone", "both") and not check_rclone_installed():
+        console.print("rclone is not installed. Install from https://rclone.org/install/", style="red")
+        raise typer.Exit(1)
+
+    # Determine which providers to run
+    if all_providers:
+        provider_names = list(config.providers.keys())
+    elif providers:
+        provider_names = providers
+    else:
+        console.print("Specify providers with --provider or use --all")
+        raise typer.Exit(1)
+
+    # Validate providers exist and create instances
+    storage_providers = []
+    rclone_providers = []
+    for name in provider_names:
+        provider_config = config.providers.get(name)
+        if not provider_config:
+            console.print(f"Provider [bold]{name}[/] not found.", style="red")
+            raise typer.Exit(1)
+        if method in ("sdk", "both"):
+            storage_providers.append(create_provider(name, provider_config))
+        if method in ("rclone", "both"):
+            rclone_providers.append(create_rclone_provider(f"{name}_rclone", provider_config))
+
+    # Parse size categories
+    categories = [s.strip() for s in sizes.split(",")]
+    valid_categories = {"small", "medium", "large"}
+    for cat in categories:
+        if cat not in valid_categories:
+            console.print(f"Invalid size category: {cat}", style="red")
+            raise typer.Exit(1)
+
+    iterations = {
+        "small": small_iter,
+        "medium": medium_iter,
+        "large": large_iter,
+    }
+
+    all_benchmark_providers = storage_providers + rclone_providers
+
+    method_label = {"sdk": "SDK", "rclone": "rclone", "both": "SDK + rclone"}[method]
+    console.print(f"\n[bold]S3 Benchmark Report[/]")
+    console.print(f"Providers: [bold]{', '.join(provider_names)}[/]")
+    console.print(f"Method: [bold]{method_label}[/]")
+    console.print(f"Size categories: [bold]{', '.join(categories)}[/]\n")
+
+    # Run benchmarks
+    console.print("[bold]Running benchmarks...[/]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Starting...", total=100)
+
+        def update_progress(msg: str, current: int, total: int) -> None:
+            progress.update(task, completed=(current / total) * 100, description=msg)
+
+        benchmark_result = run_benchmark(
+            providers=all_benchmark_providers,
+            categories=categories,
+            iterations=iterations,
+            progress_callback=update_progress,
+        )
+
+    # Cleanup rclone temp files
+    for rp in rclone_providers:
+        rp.cleanup()
+
+    # Run feature tests (SDK providers only)
+    console.print("\n[bold]Running feature tests...[/]")
+    feature_results = {}
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        for provider in storage_providers:
+            task = progress.add_task(f"Testing {provider.name}...", total=None)
+
+            def update_progress(feature: str, current: int, total: int) -> None:
+                progress.update(task, description=f"{provider.name}: {feature}")
+
+            results = run_feature_tests(provider, None, update_progress)
+            feature_results[provider.name] = results
+            progress.update(task, description=f"{provider.name}: Done")
+
+    # Save all results
+    results_file = save_results(benchmark_result)
+    csv_file = save_results_csv(benchmark_result)
+    excel_file = save_results_excel(benchmark_result)
+    report_file = save_full_report_excel(benchmark_result, feature_results, output)
+
+    console.print(f"\n[bold green]Report generated![/]")
+    console.print(f"  JSON: [dim]{results_file}[/]")
+    console.print(f"  CSV: [dim]{csv_file}[/]")
+    console.print(f"  Excel (raw): [dim]{excel_file}[/]")
+    console.print(f"  Excel (report): [bold]{report_file}[/]\n")
+
+    # Display results
+    _display_results(benchmark_result, categories)
+    _display_feature_results(feature_results)
 
 
 if __name__ == "__main__":
