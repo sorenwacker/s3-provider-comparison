@@ -22,6 +22,29 @@ from s3bench.rclone import create_rclone_provider, check_rclone_installed
 from s3bench.s5cmd import create_s5cmd_provider, check_s5cmd_installed
 
 
+def _parse_provider_method(name: str) -> tuple[str, str]:
+    """Parse provider name into (base_provider, method)."""
+    if name.endswith("_rclone"):
+        return name[:-7], "rclone"
+    elif name.endswith("_s5cmd"):
+        return name[:-6], "s5cmd"
+    return name, "sdk"
+
+
+def _format_mean_std(values: list[float], decimals: int = 2, std_decimals: int = None) -> str:
+    """Format values as mean +/- std."""
+    import statistics
+    if not values:
+        return "-"
+    if std_decimals is None:
+        std_decimals = decimals
+    mean = statistics.mean(values)
+    if len(values) > 1:
+        std = statistics.stdev(values)
+        return f"{mean:.{decimals}f}+/-{std:.{std_decimals}f}"
+    return f"{mean:.{decimals}f}"
+
+
 def get_results_dir() -> Path:
     """Get the results storage directory."""
     results_dir = Path.home() / ".config" / "s3bench" / "results"
@@ -214,6 +237,7 @@ def save_full_report_excel(
     filename: str = None
 ) -> Path:
     """Save comprehensive Excel report with multiple sheets."""
+    import statistics
     from s3bench.benchmark import get_sizes_for_category
 
     machine_info = get_machine_info()
@@ -226,6 +250,36 @@ def save_full_report_excel(
 
     wb = Workbook()
 
+    # Get all sizes
+    all_sizes = []
+    for cat in ["small", "medium", "large"]:
+        all_sizes.extend(get_sizes_for_category(cat))
+
+    # Group results by base provider and method
+    grouped = {}
+    for provider_name, provider_result in benchmark_result.provider_results.items():
+        base_provider, method = _parse_provider_method(provider_name)
+        grouped[(base_provider, method)] = provider_result
+    sorted_keys = sorted(grouped.keys(), key=lambda x: (x[0], x[1]))
+
+    # Determine n per size
+    size_n = {}
+    for pr in benchmark_result.provider_results.values():
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.upload_throughputs and size.value not in size_n:
+                size_n[size.value] = len(sr.upload_throughputs)
+
+    def size_header(size) -> str:
+        n = size_n.get(size.value, "?")
+        label = size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "")
+        return f"{label} (n={n})"
+
+    def calc_std(values):
+        if len(values) > 1:
+            return statistics.stdev(values)
+        return 0.0
+
     # Sheet 1: Summary info
     ws_info = wb.active
     ws_info.title = "Info"
@@ -234,70 +288,99 @@ def save_full_report_excel(
     ws_info.append(["Time", benchmark_result.timestamp.strftime("%H:%M:%S")])
     ws_info.append(["Hostname", machine_info["hostname"]])
     ws_info.append(["IP Address", machine_info["ip_address"]])
-    ws_info.append(["Providers", ", ".join(benchmark_result.provider_results.keys())])
+    providers_list = list(set(k[0] for k in sorted_keys))
+    methods_list = list(set(k[1] for k in sorted_keys))
+    ws_info.append(["Providers", ", ".join(sorted(providers_list))])
+    ws_info.append(["Methods", ", ".join(sorted(methods_list))])
 
-    # Get all providers and sizes
-    providers = list(benchmark_result.provider_results.keys())
-    all_sizes = []
-    for cat in ["small", "medium", "large"]:
-        all_sizes.extend(get_sizes_for_category(cat))
-
-    # Sheet 2: Upload Throughput
-    ws_upload = wb.create_sheet("Upload (MB/s)")
-    ws_upload.append(["Size"] + providers)
-    for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider in providers:
-            pr = benchmark_result.provider_results.get(provider)
-            if pr:
-                sr = pr.size_results.get(size.value)
-                if sr and sr.upload_throughputs:
-                    row.append(round(sr.avg_upload_throughput, 2))
-                else:
-                    row.append("-")
+    # Sheet 2: Upload Throughput (MiB/s) - mean
+    ws_upload = wb.create_sheet("Upload Mean")
+    ws_upload.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.upload_throughputs:
+                row.append(round(statistics.mean(sr.upload_throughputs), 2))
             else:
-                row.append("-")
+                row.append("")
         ws_upload.append(row)
 
-    # Sheet 3: Download Throughput
-    ws_download = wb.create_sheet("Download (MB/s)")
-    ws_download.append(["Size"] + providers)
-    for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider in providers:
-            pr = benchmark_result.provider_results.get(provider)
-            if pr:
-                sr = pr.size_results.get(size.value)
-                if sr and sr.download_throughputs:
-                    row.append(round(sr.avg_download_throughput, 2))
-                else:
-                    row.append("-")
+    # Sheet 3: Upload Throughput - std
+    ws_upload_std = wb.create_sheet("Upload Std")
+    ws_upload_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.upload_throughputs:
+                row.append(round(calc_std(sr.upload_throughputs), 2))
             else:
-                row.append("-")
+                row.append("")
+        ws_upload_std.append(row)
+
+    # Sheet 4: Download Throughput (MiB/s) - mean
+    ws_download = wb.create_sheet("Download Mean")
+    ws_download.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.download_throughputs:
+                row.append(round(statistics.mean(sr.download_throughputs), 2))
+            else:
+                row.append("")
         ws_download.append(row)
 
-    # Sheet 4: Latency
-    ws_latency = wb.create_sheet("Latency (sec)")
-    ws_latency.append(["Size"] + providers)
-    for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider in providers:
-            pr = benchmark_result.provider_results.get(provider)
-            if pr:
-                sr = pr.size_results.get(size.value)
-                if sr and sr.latencies:
-                    row.append(round(sr.avg_latency, 4))
-                else:
-                    row.append("-")
+    # Sheet 5: Download Throughput - std
+    ws_download_std = wb.create_sheet("Download Std")
+    ws_download_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.download_throughputs:
+                row.append(round(calc_std(sr.download_throughputs), 2))
             else:
-                row.append("-")
+                row.append("")
+        ws_download_std.append(row)
+
+    # Sheet 6: Latency (sec) - mean
+    ws_latency = wb.create_sheet("Latency Mean")
+    ws_latency.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.latencies:
+                row.append(round(statistics.mean(sr.latencies), 4))
+            else:
+                row.append("")
         ws_latency.append(row)
 
-    # Sheet 5: Feature Matrix (if provided)
+    # Sheet 7: Latency - std
+    ws_latency_std = wb.create_sheet("Latency Std")
+    ws_latency_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.latencies:
+                row.append(round(calc_std(sr.latencies), 4))
+            else:
+                row.append("")
+        ws_latency_std.append(row)
+
+    # Sheet 8: Feature Matrix (if provided)
     if feature_results:
         ws_features = wb.create_sheet("Features")
         feature_providers = list(feature_results.keys())
-        # Get all feature names
         feature_names = set()
         for pr in feature_results.values():
             feature_names.update(pr.results.keys())
@@ -325,7 +408,7 @@ def save_full_report_excel(
                     row.append("-")
             ws_features.append(row)
 
-    # Sheet 6: Raw Data
+    # Sheet 9: Raw Data
     ws_raw = wb.create_sheet("Raw Data")
     fieldnames = [
         "date", "timestamp", "hostname", "ip_address", "provider", "method",
@@ -334,15 +417,7 @@ def save_full_report_excel(
     ws_raw.append(fieldnames)
 
     for provider_name, provider_result in benchmark_result.provider_results.items():
-        if provider_name.endswith("_rclone"):
-            base_provider = provider_name[:-7]
-            method = "rclone"
-        elif provider_name.endswith("_s5cmd"):
-            base_provider = provider_name[:-6]
-            method = "s5cmd"
-        else:
-            base_provider = provider_name
-            method = "sdk"
+        base_provider, method = _parse_provider_method(provider_name)
 
         for size_bytes, size_result in provider_result.size_results.items():
             base_row = [
@@ -356,18 +431,19 @@ def save_full_report_excel(
                 size_result.size_label,
             ]
             for i, val in enumerate(size_result.upload_throughputs, 1):
-                ws_raw.append(base_row + [i, "upload_mbps", round(val, 3)])
+                ws_raw.append(base_row + [i, "upload_mibps", round(val, 3)])
             for i, val in enumerate(size_result.download_throughputs, 1):
-                ws_raw.append(base_row + [i, "download_mbps", round(val, 3)])
+                ws_raw.append(base_row + [i, "download_mibps", round(val, 3)])
             for i, val in enumerate(size_result.latencies, 1):
                 ws_raw.append(base_row + [i, "latency_sec", round(val, 6)])
 
-    # Sheet 7: Errors
+    # Sheet 10: Errors
     ws_errors = wb.create_sheet("Errors")
-    ws_errors.append(["Provider", "Error"])
+    ws_errors.append(["Provider", "Method", "Error"])
     for provider_name, provider_result in benchmark_result.provider_results.items():
+        base_provider, method = _parse_provider_method(provider_name)
         for error in provider_result.errors:
-            ws_errors.append([provider_name, error])
+            ws_errors.append([base_provider, method, error])
 
     wb.save(excel_path)
     return excel_path
@@ -514,8 +590,8 @@ def run(
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
     method: Annotated[
-        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
-    ] = "sdk",
+        Optional[str], typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
+    ] = None,
 ) -> None:
     """Run benchmarks against providers."""
     config = cfg.load_config()
@@ -523,6 +599,10 @@ def run(
     if not config.providers:
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
+
+    # Default method: "all" if --all flag, otherwise "sdk"
+    if method is None:
+        method = "all" if all_providers else "sdk"
 
     # Validate method (support comma-separated list)
     methods = [m.strip() for m in method.split(",")]
@@ -628,29 +708,6 @@ def run(
     console.print(f"CSV appended to: [dim]{csv_file}[/]")
     console.print(f"Excel appended to: [dim]{excel_file}[/]\n")
     _display_results(result, categories)
-
-
-def _parse_provider_method(name: str) -> tuple[str, str]:
-    """Parse provider name into (base_provider, method)."""
-    if name.endswith("_rclone"):
-        return name[:-7], "rclone"
-    elif name.endswith("_s5cmd"):
-        return name[:-6], "s5cmd"
-    return name, "sdk"
-
-
-def _format_mean_std(values: list[float], decimals: int = 2, std_decimals: int = None) -> str:
-    """Format values as mean +/- std."""
-    import statistics
-    if not values:
-        return "-"
-    if std_decimals is None:
-        std_decimals = decimals
-    mean = statistics.mean(values)
-    if len(values) > 1:
-        std = statistics.stdev(values)
-        return f"{mean:.{decimals}f}+/-{std:.{std_decimals}f}"
-    return f"{mean:.{decimals}f}"
 
 
 def _display_results(result, categories: list[str]) -> None:
@@ -941,8 +998,8 @@ def report(
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
     method: Annotated[
-        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
-    ] = "sdk",
+        Optional[str], typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
+    ] = None,
     output: Annotated[
         Optional[str], typer.Option("--output", "-o", help="Output filename (default: YYMMDD-s3bench-results.xlsx)")
     ] = None,
@@ -953,6 +1010,10 @@ def report(
     if not config.providers:
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
+
+    # Default method: "all" if --all flag, otherwise "sdk"
+    if method is None:
+        method = "all" if all_providers else "sdk"
 
     # Validate method (support comma-separated list)
     methods = [m.strip() for m in method.split(",")]
