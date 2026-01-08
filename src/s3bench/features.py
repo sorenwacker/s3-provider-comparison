@@ -444,7 +444,7 @@ def test_lifecycle(provider: Any) -> FeatureResult:
 
 def test_sts_credentials(provider: Any) -> FeatureResult:
     """Test STS/SAS temporary credential generation."""
-    feature_name = "Temp Credentials"
+    feature_name = "STS Temp Credentials"
 
     try:
         # Check if provider has the method
@@ -492,7 +492,7 @@ def test_sts_credentials(provider: Any) -> FeatureResult:
 
 def test_prefix_policy(provider: Any) -> FeatureResult:
     """Test prefix-based access restriction via STS/SAS."""
-    feature_name = "Prefix Policy"
+    feature_name = "STS Prefix Policy"
 
     try:
         # Check if provider has the methods
@@ -539,6 +539,64 @@ def test_prefix_policy(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
 
 
+def test_bucket_policy(provider: Any) -> FeatureResult:
+    """Test bucket policy support (for access control)."""
+    feature_name = "Bucket Policy"
+
+    try:
+        # Check if provider has the method (S3Provider only)
+        if not hasattr(provider, 'client'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Not S3 provider")
+
+        # Try to get current bucket policy
+        try:
+            provider.client.get_bucket_policy(Bucket=provider.bucket)
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "Policy exists")
+        except Exception as e:
+            error_str = str(e).lower()
+            # NoSuchBucketPolicy means the API works, just no policy set
+            if "nosuchbucketpolicy" in error_str.replace(" ", ""):
+                return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "API available")
+            # Access denied means API exists but we lack permission
+            if "accessdenied" in error_str or "forbidden" in error_str:
+                return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "API available (no permission)")
+            raise
+
+    except NotImplementedError:
+        return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
+    except Exception as e:
+        error_str = str(e).lower()
+        if any(x in error_str for x in ["not implemented", "not supported", "unknown"]):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED)
+        return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
+
+
+def test_acl(provider: Any) -> FeatureResult:
+    """Test ACL (Access Control List) support."""
+    feature_name = "ACL"
+
+    try:
+        # Check if provider has the method (S3Provider only)
+        if not hasattr(provider, 'client'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Not S3 provider")
+
+        # Try to get bucket ACL
+        response = provider.client.get_bucket_acl(Bucket=provider.bucket)
+        if response.get("Grants"):
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED)
+        return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "No grants")
+
+    except NotImplementedError:
+        return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
+    except Exception as e:
+        error_str = str(e).lower()
+        if any(x in error_str for x in ["not implemented", "not supported", "unknown"]):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED)
+        if "accessdenied" in error_str or "forbidden" in error_str:
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "No permission")
+        return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
+
+
 # All available feature tests
 FEATURE_TESTS: dict[str, Callable] = {
     "presigned_get": test_presigned_get,
@@ -552,6 +610,8 @@ FEATURE_TESTS: dict[str, Callable] = {
     "conditional": test_conditional_get,
     "versioning": test_versioning,
     "lifecycle": test_lifecycle,
+    "bucket_policy": test_bucket_policy,
+    "acl": test_acl,
     "sts_credentials": test_sts_credentials,
     "prefix_policy": test_prefix_policy,
 }
