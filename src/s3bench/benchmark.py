@@ -38,7 +38,7 @@ class FileSize(Enum):
 SMALL_SIZES = [FileSize.SMALL_1KB, FileSize.SMALL_10KB, FileSize.SMALL_100KB, FileSize.SMALL_1MB]
 MEDIUM_SIZES = [FileSize.MEDIUM_10MB, FileSize.MEDIUM_50MB, FileSize.MEDIUM_100MB]
 LARGE_SIZES = [FileSize.LARGE_200MB, FileSize.LARGE_500MB]
-XLARGE_SIZES = [FileSize.XLARGE_1GB, FileSize.XLARGE_4GB]
+XLARGE_SIZES = [FileSize.XLARGE_4GB]
 
 # Default iterations per category
 DEFAULT_ITERATIONS = {
