@@ -29,17 +29,23 @@ class FileSize(Enum):
     LARGE_200MB = 200 * 1024 * 1024
     LARGE_500MB = 500 * 1024 * 1024
 
+    # Extra large files
+    XLARGE_1GB = 1 * 1024 * 1024 * 1024
+    XLARGE_4GB = 4 * 1024 * 1024 * 1024
+
 
 # Size category definitions
 SMALL_SIZES = [FileSize.SMALL_1KB, FileSize.SMALL_10KB, FileSize.SMALL_100KB, FileSize.SMALL_1MB]
 MEDIUM_SIZES = [FileSize.MEDIUM_10MB, FileSize.MEDIUM_50MB, FileSize.MEDIUM_100MB]
 LARGE_SIZES = [FileSize.LARGE_200MB, FileSize.LARGE_500MB]
+XLARGE_SIZES = [FileSize.XLARGE_1GB, FileSize.XLARGE_4GB]
 
 # Default iterations per category
 DEFAULT_ITERATIONS = {
     "small": 10,
     "medium": 5,
     "large": 2,
+    "xlarge": 1,
 }
 
 
@@ -49,6 +55,7 @@ def get_sizes_for_category(category: str) -> list[FileSize]:
         "small": SMALL_SIZES,
         "medium": MEDIUM_SIZES,
         "large": LARGE_SIZES,
+        "xlarge": XLARGE_SIZES,
     }
     return categories.get(category, [])
 

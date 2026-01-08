@@ -252,7 +252,7 @@ def save_full_report_excel(
 
     # Get all sizes
     all_sizes = []
-    for cat in ["small", "medium", "large"]:
+    for cat in ["small", "medium", "large", "xlarge"]:
         all_sizes.extend(get_sizes_for_category(cat))
 
     # Group results by base provider and method
@@ -272,7 +272,7 @@ def save_full_report_excel(
 
     def size_header(size) -> str:
         n = size_n.get(size.value, "?")
-        label = size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "")
+        label = size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "").replace("XLARGE_", "")
         return f"{label} (n={n})"
 
     def calc_std(values):
@@ -575,11 +575,11 @@ def run(
         typer.Option("--provider", "-p", help="Provider(s) to benchmark"),
     ] = None,
     all_providers: Annotated[
-        bool, typer.Option("--all", "-a", help="Run against all providers")
+        bool, typer.Option("--all", "-a", help="Run against all providers, methods, and sizes")
     ] = False,
     sizes: Annotated[
-        str, typer.Option("--sizes", "-s", help="Size categories: small,medium,large")
-    ] = "small,medium,large",
+        Optional[str], typer.Option("--sizes", "-s", help="Size categories: small,medium,large,xlarge")
+    ] = None,
     small_iter: Annotated[
         int, typer.Option("--small-iter", help="Iterations for small files")
     ] = DEFAULT_ITERATIONS["small"],
@@ -589,6 +589,9 @@ def run(
     large_iter: Annotated[
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
+    xlarge_iter: Annotated[
+        int, typer.Option("--xlarge-iter", help="Iterations for xlarge files (1GB, 4GB)")
+    ] = DEFAULT_ITERATIONS["xlarge"],
     method: Annotated[
         Optional[str], typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
     ] = None,
@@ -599,6 +602,10 @@ def run(
     if not config.providers:
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
+
+    # Default sizes: include xlarge if --all, otherwise exclude
+    if sizes is None:
+        sizes = "small,medium,large,xlarge" if all_providers else "small,medium,large"
 
     # Default method: "all" if --all flag, otherwise "sdk"
     if method is None:
@@ -655,7 +662,7 @@ def run(
 
     # Parse size categories
     categories = [s.strip() for s in sizes.split(",")]
-    valid_categories = {"small", "medium", "large"}
+    valid_categories = {"small", "medium", "large", "xlarge"}
     for cat in categories:
         if cat not in valid_categories:
             console.print(f"Invalid size category: {cat}", style="red")
@@ -665,6 +672,7 @@ def run(
         "small": small_iter,
         "medium": medium_iter,
         "large": large_iter,
+        "xlarge": xlarge_iter,
     }
 
     # Combine all providers for benchmarking
@@ -712,6 +720,7 @@ def run(
 
 def _display_results(result, categories: list[str]) -> None:
     """Display benchmark results as tables with provider/method as rows and sizes as columns."""
+    import statistics
     from s3bench.benchmark import get_sizes_for_category
 
     # Get all sizes tested
@@ -736,18 +745,24 @@ def _display_results(result, categories: list[str]) -> None:
             if sr and sr.upload_throughputs and size.value not in size_n:
                 size_n[size.value] = len(sr.upload_throughputs)
 
-    # Build size column headers with n
-    def size_header(size) -> str:
-        n = size_n.get(size.value, "?")
-        label = size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "")
-        return f"{label} (n={n})"
+    # Build size label without prefix
+    def size_label(size) -> str:
+        return size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "").replace("XLARGE_", "")
 
-    # Upload throughput table
-    upload_table = Table(title="Upload Throughput (MiB/s) mean+/-std")
+    def calc_mean(values):
+        return statistics.mean(values) if values else 0.0
+
+    def calc_std(values):
+        return statistics.stdev(values) if len(values) > 1 else 0.0
+
+    # Upload throughput table - separate mean and std columns
+    upload_table = Table(title="Upload Throughput (MiB/s)")
     upload_table.add_column("Provider", style="cyan")
     upload_table.add_column("Method", style="dim")
     for size in all_sizes:
-        upload_table.add_column(size_header(size), justify="right")
+        n = size_n.get(size.value, "?")
+        upload_table.add_column(f"{size_label(size)} mean", justify="right")
+        upload_table.add_column(f"std (n={n})", justify="right", style="dim")
 
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -755,20 +770,23 @@ def _display_results(result, categories: list[str]) -> None:
         for size in all_sizes:
             sr = pr.size_results.get(size.value)
             if sr and sr.upload_throughputs:
-                row.append(_format_mean_std(sr.upload_throughputs, 2))
+                row.append(f"{calc_mean(sr.upload_throughputs):.2f}")
+                row.append(f"{calc_std(sr.upload_throughputs):.2f}")
             else:
-                row.append("-")
+                row.extend(["-", "-"])
         upload_table.add_row(*row)
 
     console.print(upload_table)
     console.print()
 
     # Download throughput table
-    download_table = Table(title="Download Throughput (MiB/s) mean+/-std")
+    download_table = Table(title="Download Throughput (MiB/s)")
     download_table.add_column("Provider", style="cyan")
     download_table.add_column("Method", style="dim")
     for size in all_sizes:
-        download_table.add_column(size_header(size), justify="right")
+        n = size_n.get(size.value, "?")
+        download_table.add_column(f"{size_label(size)} mean", justify="right")
+        download_table.add_column(f"std (n={n})", justify="right", style="dim")
 
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -776,20 +794,23 @@ def _display_results(result, categories: list[str]) -> None:
         for size in all_sizes:
             sr = pr.size_results.get(size.value)
             if sr and sr.download_throughputs:
-                row.append(_format_mean_std(sr.download_throughputs, 2))
+                row.append(f"{calc_mean(sr.download_throughputs):.2f}")
+                row.append(f"{calc_std(sr.download_throughputs):.2f}")
             else:
-                row.append("-")
+                row.extend(["-", "-"])
         download_table.add_row(*row)
 
     console.print(download_table)
     console.print()
 
     # Latency table
-    latency_table = Table(title="Latency / TTFB (seconds) mean+/-std")
+    latency_table = Table(title="Latency / TTFB (seconds)")
     latency_table.add_column("Provider", style="cyan")
     latency_table.add_column("Method", style="dim")
     for size in all_sizes:
-        latency_table.add_column(size_header(size), justify="right")
+        n = size_n.get(size.value, "?")
+        latency_table.add_column(f"{size_label(size)} mean", justify="right")
+        latency_table.add_column(f"std (n={n})", justify="right", style="dim")
 
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -797,9 +818,10 @@ def _display_results(result, categories: list[str]) -> None:
         for size in all_sizes:
             sr = pr.size_results.get(size.value)
             if sr and sr.latencies:
-                row.append(_format_mean_std(sr.latencies, 3, 2))
+                row.append(f"{calc_mean(sr.latencies):.3f}")
+                row.append(f"{calc_std(sr.latencies):.3f}")
             else:
-                row.append("-")
+                row.extend(["-", "-"])
         latency_table.add_row(*row)
 
     console.print(latency_table)
@@ -1039,11 +1061,11 @@ def report(
         typer.Option("--provider", "-p", help="Provider(s) to test"),
     ] = None,
     all_providers: Annotated[
-        bool, typer.Option("--all", "-a", help="Test all providers")
+        bool, typer.Option("--all", "-a", help="Run against all providers, methods, and sizes")
     ] = False,
     sizes: Annotated[
-        str, typer.Option("--sizes", "-s", help="Size categories: small,medium,large")
-    ] = "small,medium,large",
+        Optional[str], typer.Option("--sizes", "-s", help="Size categories: small,medium,large,xlarge")
+    ] = None,
     small_iter: Annotated[
         int, typer.Option("--small-iter", help="Iterations for small files")
     ] = DEFAULT_ITERATIONS["small"],
@@ -1053,6 +1075,9 @@ def report(
     large_iter: Annotated[
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
+    xlarge_iter: Annotated[
+        int, typer.Option("--xlarge-iter", help="Iterations for xlarge files (1GB, 4GB)")
+    ] = DEFAULT_ITERATIONS["xlarge"],
     method: Annotated[
         Optional[str], typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
     ] = None,
@@ -1066,6 +1091,10 @@ def report(
     if not config.providers:
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
+
+    # Default sizes: include xlarge if --all, otherwise exclude
+    if sizes is None:
+        sizes = "small,medium,large,xlarge" if all_providers else "small,medium,large"
 
     # Default method: "all" if --all flag, otherwise "sdk"
     if method is None:
@@ -1122,7 +1151,7 @@ def report(
 
     # Parse size categories
     categories = [s.strip() for s in sizes.split(",")]
-    valid_categories = {"small", "medium", "large"}
+    valid_categories = {"small", "medium", "large", "xlarge"}
     for cat in categories:
         if cat not in valid_categories:
             console.print(f"Invalid size category: {cat}", style="red")
@@ -1132,6 +1161,7 @@ def report(
         "small": small_iter,
         "medium": medium_iter,
         "large": large_iter,
+        "xlarge": xlarge_iter,
     }
 
     all_benchmark_providers = storage_providers + rclone_providers + s5cmd_providers

@@ -597,6 +597,77 @@ def test_acl(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
 
 
+def test_iam_api(provider: Any) -> FeatureResult:
+    """Test IAM API support for user/policy management."""
+    feature_name = "IAM API"
+
+    try:
+        # Azure uses RBAC, not IAM
+        if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC")
+
+        import boto3
+
+        # Determine IAM endpoint based on provider
+        endpoint_url = getattr(provider.config, 'endpoint_url', None)
+        iam_endpoint = None
+
+        if endpoint_url:
+            # Wasabi uses separate IAM endpoint
+            if "wasabi" in endpoint_url.lower():
+                iam_endpoint = "https://iam.wasabisys.com"
+            # Other S3-compatible may not have IAM
+            else:
+                # Try same endpoint - some providers expose IAM on same host
+                iam_endpoint = endpoint_url.rstrip('/').replace(':443', '')
+
+        # Create IAM client
+        from botocore.config import Config as BotoConfig
+
+        iam_kwargs = {
+            "service_name": "iam",
+            "aws_access_key_id": provider.config.access_key.get_secret_value(),
+            "aws_secret_access_key": provider.config.secret_key.get_secret_value(),
+            "config": BotoConfig(signature_version="v4"),
+        }
+        # Wasabi IAM requires us-east-1 region
+        if iam_endpoint and "wasabi" in iam_endpoint.lower():
+            iam_kwargs["region_name"] = "us-east-1"
+        elif provider.config.region:
+            iam_kwargs["region_name"] = provider.config.region
+        if iam_endpoint:
+            iam_kwargs["endpoint_url"] = iam_endpoint
+
+        iam_client = boto3.client(**iam_kwargs)
+
+        # Try to list users (read-only, safe operation)
+        response = iam_client.list_users(MaxItems=1)
+
+        if "Users" in response:
+            user_count = len(response.get("Users", []))
+            is_truncated = response.get("IsTruncated", False)
+            if is_truncated or user_count > 0:
+                return FeatureResult(feature_name, FeatureStatus.SUPPORTED, f"{user_count}+ users")
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED)
+        return FeatureResult(feature_name, FeatureStatus.SUPPORTED)
+
+    except NotImplementedError:
+        return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
+    except Exception as e:
+        error_str = str(e).lower()
+        # IAM not supported/implemented
+        if any(x in error_str for x in [
+            "not implemented", "not supported", "unknown", "invalidaction",
+            "nosuchaction", "could not connect", "name or service not known",
+            "connection refused", "timeout", "unable to locate"
+        ]):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED)
+        # Access denied means IAM exists but we lack permission
+        if "accessdenied" in error_str or "forbidden" in error_str:
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "No permission")
+        return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
+
+
 # All available feature tests
 FEATURE_TESTS: dict[str, Callable] = {
     "presigned_get": test_presigned_get,
@@ -612,6 +683,7 @@ FEATURE_TESTS: dict[str, Callable] = {
     "lifecycle": test_lifecycle,
     "bucket_policy": test_bucket_policy,
     "acl": test_acl,
+    "iam_api": test_iam_api,
     "sts_credentials": test_sts_credentials,
     "prefix_policy": test_prefix_policy,
 }
