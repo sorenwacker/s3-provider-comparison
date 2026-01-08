@@ -50,6 +50,7 @@ resource "azurerm_storage_account" "s3bench" {
   is_hns_enabled = true
 
   blob_properties {
+    # Note: versioning_enabled not compatible with is_hns_enabled
     delete_retention_policy {
       days = 7
     }

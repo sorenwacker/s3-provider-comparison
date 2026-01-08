@@ -59,7 +59,8 @@ def test_presigned_get(provider: Any) -> FeatureResult:
     """Test presigned GET URL generation and usage."""
     feature_name = "Presigned GET"
     test_key = _generate_test_key()
-    test_data = b"presigned-get-test-data"
+    # Use 64 bytes to avoid some provider bugs with certain body sizes
+    test_data = b"presigned-get-test-data" + b"x" * 41
 
     try:
         # Upload test object
@@ -101,7 +102,8 @@ def test_presigned_put(provider: Any) -> FeatureResult:
     """Test presigned PUT URL generation and usage."""
     feature_name = "Presigned PUT"
     test_key = _generate_test_key()
-    test_data = b"presigned-put-test-data"
+    # Use 64 bytes to avoid some provider bugs with certain body sizes
+    test_data = b"presigned-put-test-data" + b"x" * 41
 
     try:
         # Generate presigned URL for upload
@@ -110,6 +112,9 @@ def test_presigned_put(provider: Any) -> FeatureResult:
         # Try to upload without credentials
         req = urllib.request.Request(url, data=test_data, method="PUT")
         req.add_header("Content-Type", "application/octet-stream")
+        # Azure requires blob type header
+        if "blob.core.windows.net" in url:
+            req.add_header("x-ms-blob-type", "BlockBlob")
         with urllib.request.urlopen(req, timeout=30) as response:
             pass  # Just need successful upload
 

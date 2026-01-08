@@ -100,7 +100,11 @@ resource "aws_iam_user_policy" "s3bench" {
           "s3:PutObject",
           "s3:GetObject",
           "s3:DeleteObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:GetObjectTagging",
+          "s3:PutObjectTagging",
+          "s3:GetBucketVersioning",
+          "s3:GetLifecycleConfiguration"
         ]
         Resource = [
           aws_s3_bucket.benchmark.arn,
