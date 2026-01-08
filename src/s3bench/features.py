@@ -442,6 +442,93 @@ def test_lifecycle(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e))
 
 
+def test_sts_credentials(provider: Any) -> FeatureResult:
+    """Test STS/SAS temporary credential generation."""
+    feature_name = "Temp Credentials"
+
+    try:
+        # Check if provider has the method
+        if not hasattr(provider, 'generate_sts_credentials'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Method not available")
+
+        # Generate temporary credentials for a test prefix
+        test_prefix = f"{TEST_PREFIX}sts-{uuid.uuid4().hex[:8]}/"
+        creds = provider.generate_sts_credentials(
+            prefix=test_prefix,
+            permissions=["read", "write", "delete"],
+            duration_seconds=900,  # 15 min
+        )
+
+        # Verify we got credentials back
+        is_s3 = "AccessKeyId" in creds
+        is_azure = "SasToken" in creds
+
+        if is_s3:
+            if creds.get("AccessKeyId") and creds.get("SecretAccessKey") and creds.get("SessionToken"):
+                return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "STS Federation Token")
+            else:
+                return FeatureResult(feature_name, FeatureStatus.ERROR, "Incomplete credentials")
+        elif is_azure:
+            if creds.get("SasToken"):
+                return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "SAS Token")
+            else:
+                return FeatureResult(feature_name, FeatureStatus.ERROR, "No SAS token returned")
+        else:
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "Unknown credential format")
+
+    except NotImplementedError:
+        return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
+    except Exception as e:
+        error_str = str(e).lower()
+        if any(x in error_str for x in ["not implemented", "sts", "accessdenied", "not authorized"]):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, str(e)[:100])
+        return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
+
+
+def test_prefix_policy(provider: Any) -> FeatureResult:
+    """Test prefix-based access restriction via STS/SAS."""
+    feature_name = "Prefix Policy"
+
+    try:
+        # Check if provider has the methods
+        if not hasattr(provider, 'generate_sts_credentials') or not hasattr(provider, 'test_sts_prefix_access'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Methods not available")
+
+        # Generate credentials restricted to a test prefix
+        test_prefix = f"{TEST_PREFIX}prefix-policy-{uuid.uuid4().hex[:8]}/"
+        creds = provider.generate_sts_credentials(
+            prefix=test_prefix,
+            permissions=["read", "write", "delete"],
+            duration_seconds=900,
+        )
+
+        # Test the access restrictions
+        result = provider.test_sts_prefix_access(test_prefix, creds)
+
+        if result.get("note"):
+            # Azure case: SAS cannot do prefix restriction
+            if result.get("allowed_access"):
+                return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, result["note"])
+            else:
+                return FeatureResult(feature_name, FeatureStatus.ERROR, "Token not working")
+
+        # S3 case: test both allowed and denied access
+        if result.get("allowed_access") and result.get("denied_access"):
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "Prefix isolation verified")
+        elif result.get("allowed_access"):
+            return FeatureResult(feature_name, FeatureStatus.SUPPORTED, "Access works, denial not verified")
+        else:
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "Credentials not functional")
+
+    except NotImplementedError:
+        return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
+    except Exception as e:
+        error_str = str(e).lower()
+        if any(x in error_str for x in ["not implemented", "sts", "accessdenied"]):
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, str(e)[:100])
+        return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
+
+
 # All available feature tests
 FEATURE_TESTS: dict[str, Callable] = {
     "presigned_get": test_presigned_get,
@@ -455,6 +542,8 @@ FEATURE_TESTS: dict[str, Callable] = {
     "conditional": test_conditional_get,
     "versioning": test_versioning,
     "lifecycle": test_lifecycle,
+    "sts_credentials": test_sts_credentials,
+    "prefix_policy": test_prefix_policy,
 }
 
 

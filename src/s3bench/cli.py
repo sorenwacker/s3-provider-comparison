@@ -19,6 +19,7 @@ from s3bench.benchmark import run_benchmark, DEFAULT_ITERATIONS, BenchmarkResult
 from s3bench.providers import create_provider
 from s3bench.features import run_feature_tests, FEATURE_TESTS, FeatureStatus
 from s3bench.rclone import create_rclone_provider, check_rclone_installed
+from s3bench.s5cmd import create_s5cmd_provider, check_s5cmd_installed
 
 
 def get_results_dir() -> Path:
@@ -95,6 +96,9 @@ def save_results_csv(result: BenchmarkResult) -> Path:
         if provider_name.endswith("_rclone"):
             base_provider = provider_name[:-7]  # Remove "_rclone"
             method = "rclone"
+        elif provider_name.endswith("_s5cmd"):
+            base_provider = provider_name[:-6]  # Remove "_s5cmd"
+            method = "s5cmd"
         else:
             base_provider = provider_name
             method = "sdk"
@@ -153,6 +157,9 @@ def save_results_excel(result: BenchmarkResult) -> Path:
         if provider_name.endswith("_rclone"):
             base_provider = provider_name[:-7]
             method = "rclone"
+        elif provider_name.endswith("_s5cmd"):
+            base_provider = provider_name[:-6]
+            method = "s5cmd"
         else:
             base_provider = provider_name
             method = "sdk"
@@ -330,6 +337,9 @@ def save_full_report_excel(
         if provider_name.endswith("_rclone"):
             base_provider = provider_name[:-7]
             method = "rclone"
+        elif provider_name.endswith("_s5cmd"):
+            base_provider = provider_name[:-6]
+            method = "s5cmd"
         else:
             base_provider = provider_name
             method = "sdk"
@@ -504,8 +514,8 @@ def run(
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
     method: Annotated[
-        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, or both")
-    ] = "both",
+        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
+    ] = "sdk",
 ) -> None:
     """Run benchmarks against providers."""
     config = cfg.load_config()
@@ -514,15 +524,24 @@ def run(
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
 
-    # Validate method
-    valid_methods = {"sdk", "rclone", "both"}
-    if method not in valid_methods:
-        console.print(f"Invalid method: {method}. Use: sdk, rclone, or both", style="red")
-        raise typer.Exit(1)
+    # Validate method (support comma-separated list)
+    methods = [m.strip() for m in method.split(",")]
+    valid_methods = {"sdk", "rclone", "s5cmd", "all"}
+    for m in methods:
+        if m not in valid_methods:
+            console.print(f"Invalid method: {m}. Use: sdk, rclone, s5cmd, all, or comma-separated", style="red")
+            raise typer.Exit(1)
+    if "all" in methods:
+        methods = ["sdk", "rclone", "s5cmd"]
 
     # Check rclone if needed
-    if method in ("rclone", "both") and not check_rclone_installed():
+    if "rclone" in methods and not check_rclone_installed():
         console.print("rclone is not installed. Install from https://rclone.org/install/", style="red")
+        raise typer.Exit(1)
+
+    # Check s5cmd if needed
+    if "s5cmd" in methods and not check_s5cmd_installed():
+        console.print("s5cmd is not installed. Install from https://github.com/peak/s5cmd", style="red")
         raise typer.Exit(1)
 
     # Determine which providers to run
@@ -537,15 +556,22 @@ def run(
     # Validate providers exist and create instances
     storage_providers = []
     rclone_providers = []
+    s5cmd_providers = []
     for name in provider_names:
         provider_config = config.providers.get(name)
         if not provider_config:
             console.print(f"Provider [bold]{name}[/] not found.", style="red")
             raise typer.Exit(1)
-        if method in ("sdk", "both"):
+        if "sdk" in methods:
             storage_providers.append(create_provider(name, provider_config))
-        if method in ("rclone", "both"):
+        if "rclone" in methods:
             rclone_providers.append(create_rclone_provider(f"{name}_rclone", provider_config))
+        if "s5cmd" in methods:
+            # s5cmd only supports S3-compatible providers
+            if provider_config.provider_type != ProviderType.AZURE:
+                s5cmd_providers.append(create_s5cmd_provider(f"{name}_s5cmd", provider_config))
+            else:
+                console.print(f"[yellow]Skipping s5cmd for {name} (Azure not supported by s5cmd)[/]")
 
     # Parse size categories
     categories = [s.strip() for s in sizes.split(",")]
@@ -562,9 +588,9 @@ def run(
     }
 
     # Combine all providers for benchmarking
-    all_benchmark_providers = storage_providers + rclone_providers
+    all_benchmark_providers = storage_providers + rclone_providers + s5cmd_providers
 
-    method_label = {"sdk": "SDK", "rclone": "rclone", "both": "SDK + rclone"}[method]
+    method_label = ", ".join(m.upper() if m == "sdk" else m for m in methods)
     console.print(f"Running benchmarks for: [bold]{', '.join(provider_names)}[/]")
     console.print(f"Method: [bold]{method_label}[/]")
     console.print(f"Size categories: [bold]{', '.join(categories)}[/]")
@@ -588,9 +614,11 @@ def run(
             progress_callback=update_progress,
         )
 
-    # Cleanup rclone temp files
+    # Cleanup temp files
     for rp in rclone_providers:
         rp.cleanup()
+    for sp in s5cmd_providers:
+        sp.cleanup()
 
     # Save and display results
     results_file = save_results(result)
@@ -861,28 +889,37 @@ def report(
         int, typer.Option("--large-iter", help="Iterations for large files")
     ] = DEFAULT_ITERATIONS["large"],
     method: Annotated[
-        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, or both")
-    ] = "both",
+        str, typer.Option("--method", "-m", help="Benchmark method: sdk, rclone, s5cmd, or all")
+    ] = "sdk",
     output: Annotated[
         Optional[str], typer.Option("--output", "-o", help="Output filename (default: YYMMDD-s3bench-results.xlsx)")
     ] = None,
 ) -> None:
-    """Run full report: benchmarks + features → Excel."""
+    """Run full report: benchmarks + features -> Excel."""
     config = cfg.load_config()
 
     if not config.providers:
         console.print("No providers configured. Use [bold]s3bench provider add[/] first.")
         raise typer.Exit(1)
 
-    # Validate method
-    valid_methods = {"sdk", "rclone", "both"}
-    if method not in valid_methods:
-        console.print(f"Invalid method: {method}. Use: sdk, rclone, or both", style="red")
-        raise typer.Exit(1)
+    # Validate method (support comma-separated list)
+    methods = [m.strip() for m in method.split(",")]
+    valid_methods = {"sdk", "rclone", "s5cmd", "all"}
+    for m in methods:
+        if m not in valid_methods:
+            console.print(f"Invalid method: {m}. Use: sdk, rclone, s5cmd, all, or comma-separated", style="red")
+            raise typer.Exit(1)
+    if "all" in methods:
+        methods = ["sdk", "rclone", "s5cmd"]
 
     # Check rclone if needed
-    if method in ("rclone", "both") and not check_rclone_installed():
+    if "rclone" in methods and not check_rclone_installed():
         console.print("rclone is not installed. Install from https://rclone.org/install/", style="red")
+        raise typer.Exit(1)
+
+    # Check s5cmd if needed
+    if "s5cmd" in methods and not check_s5cmd_installed():
+        console.print("s5cmd is not installed. Install from https://github.com/peak/s5cmd", style="red")
         raise typer.Exit(1)
 
     # Determine which providers to run
@@ -897,15 +934,22 @@ def report(
     # Validate providers exist and create instances
     storage_providers = []
     rclone_providers = []
+    s5cmd_providers = []
     for name in provider_names:
         provider_config = config.providers.get(name)
         if not provider_config:
             console.print(f"Provider [bold]{name}[/] not found.", style="red")
             raise typer.Exit(1)
-        if method in ("sdk", "both"):
+        if "sdk" in methods:
             storage_providers.append(create_provider(name, provider_config))
-        if method in ("rclone", "both"):
+        if "rclone" in methods:
             rclone_providers.append(create_rclone_provider(f"{name}_rclone", provider_config))
+        if "s5cmd" in methods:
+            # s5cmd only supports S3-compatible providers
+            if provider_config.provider_type != ProviderType.AZURE:
+                s5cmd_providers.append(create_s5cmd_provider(f"{name}_s5cmd", provider_config))
+            else:
+                console.print(f"[yellow]Skipping s5cmd for {name} (Azure not supported by s5cmd)[/]")
 
     # Parse size categories
     categories = [s.strip() for s in sizes.split(",")]
@@ -921,9 +965,9 @@ def report(
         "large": large_iter,
     }
 
-    all_benchmark_providers = storage_providers + rclone_providers
+    all_benchmark_providers = storage_providers + rclone_providers + s5cmd_providers
 
-    method_label = {"sdk": "SDK", "rclone": "rclone", "both": "SDK + rclone"}[method]
+    method_label = ", ".join(m.upper() if m == "sdk" else m for m in methods)
     console.print(f"\n[bold]S3 Benchmark Report[/]")
     console.print(f"Providers: [bold]{', '.join(provider_names)}[/]")
     console.print(f"Method: [bold]{method_label}[/]")
@@ -950,9 +994,11 @@ def report(
             progress_callback=update_progress,
         )
 
-    # Cleanup rclone temp files
+    # Cleanup temp files
     for rp in rclone_providers:
         rp.cleanup()
+    for sp in s5cmd_providers:
+        sp.cleanup()
 
     # Run feature tests (SDK providers only)
     console.print("\n[bold]Running feature tests...[/]")
