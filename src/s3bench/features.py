@@ -544,9 +544,9 @@ def test_bucket_policy(provider: Any) -> FeatureResult:
     feature_name = "Bucket Policy"
 
     try:
-        # Check if provider has the method (S3Provider only)
-        if not hasattr(provider, 'client'):
-            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Not S3 provider")
+        # Azure uses RBAC/SAS, not bucket policies
+        if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC/SAS")
 
         # Try to get current bucket policy
         try:
@@ -566,7 +566,7 @@ def test_bucket_policy(provider: Any) -> FeatureResult:
         return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE)
     except Exception as e:
         error_str = str(e).lower()
-        if any(x in error_str for x in ["not implemented", "not supported", "unknown"]):
+        if any(x in error_str for x in ["not implemented", "notimplemented", "not supported", "unknown"]):
             return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED)
         return FeatureResult(feature_name, FeatureStatus.ERROR, str(e)[:100])
 
@@ -576,9 +576,9 @@ def test_acl(provider: Any) -> FeatureResult:
     feature_name = "ACL"
 
     try:
-        # Check if provider has the method (S3Provider only)
-        if not hasattr(provider, 'client'):
-            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Not S3 provider")
+        # Azure uses RBAC/SAS, not ACLs
+        if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
+            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC/SAS")
 
         # Try to get bucket ACL
         response = provider.client.get_bucket_acl(Bucket=provider.bucket)
