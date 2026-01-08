@@ -630,8 +630,31 @@ def run(
     _display_results(result, categories)
 
 
+def _parse_provider_method(name: str) -> tuple[str, str]:
+    """Parse provider name into (base_provider, method)."""
+    if name.endswith("_rclone"):
+        return name[:-7], "rclone"
+    elif name.endswith("_s5cmd"):
+        return name[:-6], "s5cmd"
+    return name, "sdk"
+
+
+def _format_mean_std(values: list[float], decimals: int = 2, std_decimals: int = None) -> str:
+    """Format values as mean +/- std."""
+    import statistics
+    if not values:
+        return "-"
+    if std_decimals is None:
+        std_decimals = decimals
+    mean = statistics.mean(values)
+    if len(values) > 1:
+        std = statistics.stdev(values)
+        return f"{mean:.{decimals}f}+/-{std:.{std_decimals}f}"
+    return f"{mean:.{decimals}f}"
+
+
 def _display_results(result, categories: list[str]) -> None:
-    """Display benchmark results as tables."""
+    """Display benchmark results as tables with provider/method as rows and sizes as columns."""
     from s3bench.benchmark import get_sizes_for_category
 
     # Get all sizes tested
@@ -639,18 +662,43 @@ def _display_results(result, categories: list[str]) -> None:
     for cat in categories:
         all_sizes.extend(get_sizes_for_category(cat))
 
-    # Upload throughput table
-    upload_table = Table(title="Upload Throughput (MB/s)")
-    upload_table.add_column("Size", style="cyan")
-    for provider_name in result.provider_results:
-        upload_table.add_column(provider_name, justify="right")
+    # Group results by base provider and method
+    grouped = {}  # {(provider, method): provider_result}
+    for provider_name, provider_result in result.provider_results.items():
+        base_provider, method = _parse_provider_method(provider_name)
+        grouped[(base_provider, method)] = provider_result
 
+    # Sort by provider then method
+    sorted_keys = sorted(grouped.keys(), key=lambda x: (x[0], x[1]))
+
+    # Determine n (iterations) per size category from first result with data
+    size_n = {}
+    for pr in result.provider_results.values():
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.upload_throughputs and size.value not in size_n:
+                size_n[size.value] = len(sr.upload_throughputs)
+
+    # Build size column headers with n
+    def size_header(size) -> str:
+        n = size_n.get(size.value, "?")
+        label = size.name.replace("SMALL_", "").replace("MEDIUM_", "").replace("LARGE_", "")
+        return f"{label} (n={n})"
+
+    # Upload throughput table
+    upload_table = Table(title="Upload Throughput (MiB/s) mean+/-std")
+    upload_table.add_column("Provider", style="cyan")
+    upload_table.add_column("Method", style="dim")
     for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider_name, provider_result in result.provider_results.items():
-            size_result = provider_result.size_results.get(size.value)
-            if size_result:
-                row.append(f"{size_result.avg_upload_throughput:.2f}")
+        upload_table.add_column(size_header(size), justify="right")
+
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.upload_throughputs:
+                row.append(_format_mean_std(sr.upload_throughputs, 2))
             else:
                 row.append("-")
         upload_table.add_row(*row)
@@ -659,17 +707,19 @@ def _display_results(result, categories: list[str]) -> None:
     console.print()
 
     # Download throughput table
-    download_table = Table(title="Download Throughput (MB/s)")
-    download_table.add_column("Size", style="cyan")
-    for provider_name in result.provider_results:
-        download_table.add_column(provider_name, justify="right")
-
+    download_table = Table(title="Download Throughput (MiB/s) mean+/-std")
+    download_table.add_column("Provider", style="cyan")
+    download_table.add_column("Method", style="dim")
     for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider_name, provider_result in result.provider_results.items():
-            size_result = provider_result.size_results.get(size.value)
-            if size_result:
-                row.append(f"{size_result.avg_download_throughput:.2f}")
+        download_table.add_column(size_header(size), justify="right")
+
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.download_throughputs:
+                row.append(_format_mean_std(sr.download_throughputs, 2))
             else:
                 row.append("-")
         download_table.add_row(*row)
@@ -678,17 +728,19 @@ def _display_results(result, categories: list[str]) -> None:
     console.print()
 
     # Latency table
-    latency_table = Table(title="Latency / TTFB (seconds)")
-    latency_table.add_column("Size", style="cyan")
-    for provider_name in result.provider_results:
-        latency_table.add_column(provider_name, justify="right")
-
+    latency_table = Table(title="Latency / TTFB (seconds) mean+/-std")
+    latency_table.add_column("Provider", style="cyan")
+    latency_table.add_column("Method", style="dim")
     for size in all_sizes:
-        row = [size.name.replace("_", " ")]
-        for provider_name, provider_result in result.provider_results.items():
-            size_result = provider_result.size_results.get(size.value)
-            if size_result:
-                row.append(f"{size_result.avg_latency:.4f}")
+        latency_table.add_column(size_header(size), justify="right")
+
+    for (provider, method) in sorted_keys:
+        pr = grouped[(provider, method)]
+        row = [provider, method]
+        for size in all_sizes:
+            sr = pr.size_results.get(size.value)
+            if sr and sr.latencies:
+                row.append(_format_mean_std(sr.latencies, 3, 2))
             else:
                 row.append("-")
         latency_table.add_row(*row)
