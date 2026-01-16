@@ -896,6 +896,7 @@ def _infer_categories_from_result(result: BenchmarkResult) -> list[str]:
 def results(
     last: Annotated[int, typer.Option("--last", "-n", help="Show last N results")] = 5,
     show: Annotated[bool, typer.Option("--show", "-s", help="Display benchmark tables from last result")] = False,
+    export: Annotated[bool, typer.Option("--export", "-e", help="Export last result to summary Excel")] = False,
 ) -> None:
     """List past benchmark results."""
     results_dir = get_results_dir()
@@ -903,6 +904,15 @@ def results(
 
     if not files:
         console.print("No benchmark results found.")
+        return
+
+    if export:
+        # Load last result and generate summary Excel
+        with open(files[0]) as fp:
+            data = json.load(fp)
+        result = _load_benchmark_result(data)
+        report_file = save_full_report_excel(result)
+        console.print(f"Summary Excel exported to: [bold]{report_file}[/]")
         return
 
     if show:
@@ -934,7 +944,7 @@ def results(
 
     console.print(table)
     console.print(f"\nResults stored in: [dim]{results_dir}[/]")
-    console.print("[dim]Use --show to display the last benchmark tables[/]")
+    console.print("[dim]Use --show to display tables, --export to generate summary Excel[/]")
 
 
 def _save_features_excel(all_results: dict) -> Path:
