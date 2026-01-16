@@ -9,6 +9,9 @@ from typing import Annotated, Optional
 
 import typer
 from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.table import Table as ExcelTable, TableStyleInfo
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.utils import get_column_letter
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
@@ -232,6 +235,59 @@ def save_results_excel(result: BenchmarkResult) -> Path:
     return excel_path
 
 
+def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_type: str = None):
+    """Add Excel table definition and optional heatmap to worksheet.
+
+    Args:
+        ws: Worksheet
+        table_name: Name for the Excel table
+        num_rows: Number of data rows (excluding header)
+        num_cols: Total number of columns
+        heatmap_type: 'higher_better' (green=high), 'lower_better' (green=low), or None
+    """
+    if num_rows < 1:
+        return
+
+    # Define table range (A1 to last cell)
+    end_col = get_column_letter(num_cols)
+    end_row = num_rows + 1  # +1 for header
+    table_ref = f"A1:{end_col}{end_row}"
+
+    # Create table with style
+    table = ExcelTable(displayName=table_name, ref=table_ref)
+    style = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    table.tableStyleInfo = style
+    ws.add_table(table)
+
+    # Add heatmap conditional formatting to data columns (skip Provider, Method)
+    if heatmap_type and num_cols > 2:
+        data_start_col = get_column_letter(3)  # Column C (first data column)
+        data_end_col = get_column_letter(num_cols)
+        data_range = f"{data_start_col}2:{data_end_col}{end_row}"
+
+        if heatmap_type == "higher_better":
+            # Green for high values, red for low (throughput)
+            rule = ColorScaleRule(
+                start_type="min", start_color="F8696B",  # Red
+                mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
+                end_type="max", end_color="63BE7B",  # Green
+            )
+        else:  # lower_better
+            # Green for low values, red for high (latency, std)
+            rule = ColorScaleRule(
+                start_type="min", start_color="63BE7B",  # Green
+                mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
+                end_type="max", end_color="F8696B",  # Red
+            )
+        ws.conditional_formatting.add(data_range, rule)
+
+
 def save_full_report_excel(
     benchmark_result: BenchmarkResult,
     feature_results: dict = None,
@@ -294,8 +350,11 @@ def save_full_report_excel(
     ws_info.append(["Providers", ", ".join(sorted(providers_list))])
     ws_info.append(["Methods", ", ".join(sorted(methods_list))])
 
+    num_data_rows = len(sorted_keys)
+    num_cols = 2 + len(all_sizes)  # Provider, Method + sizes
+
     # Sheet 2: Upload Throughput (MiB/s) - mean
-    ws_upload = wb.create_sheet("Upload Mean")
+    ws_upload = wb.create_sheet("Upload Mean (MiB/s)")
     ws_upload.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -307,9 +366,10 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_upload.append(row)
+    _add_excel_table(ws_upload, "UploadMean", num_data_rows, num_cols, "higher_better")
 
     # Sheet 3: Upload Throughput - std
-    ws_upload_std = wb.create_sheet("Upload Std")
+    ws_upload_std = wb.create_sheet("Upload Std (MiB/s)")
     ws_upload_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -321,9 +381,10 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_upload_std.append(row)
+    _add_excel_table(ws_upload_std, "UploadStd", num_data_rows, num_cols, "lower_better")
 
     # Sheet 4: Download Throughput (MiB/s) - mean
-    ws_download = wb.create_sheet("Download Mean")
+    ws_download = wb.create_sheet("Download Mean (MiB/s)")
     ws_download.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -335,9 +396,10 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_download.append(row)
+    _add_excel_table(ws_download, "DownloadMean", num_data_rows, num_cols, "higher_better")
 
     # Sheet 5: Download Throughput - std
-    ws_download_std = wb.create_sheet("Download Std")
+    ws_download_std = wb.create_sheet("Download Std (MiB/s)")
     ws_download_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -349,9 +411,10 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_download_std.append(row)
+    _add_excel_table(ws_download_std, "DownloadStd", num_data_rows, num_cols, "lower_better")
 
     # Sheet 6: Latency (sec) - mean
-    ws_latency = wb.create_sheet("Latency Mean")
+    ws_latency = wb.create_sheet("Latency Mean (sec)")
     ws_latency.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -363,9 +426,10 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_latency.append(row)
+    _add_excel_table(ws_latency, "LatencyMean", num_data_rows, num_cols, "lower_better")
 
     # Sheet 7: Latency - std
-    ws_latency_std = wb.create_sheet("Latency Std")
+    ws_latency_std = wb.create_sheet("Latency Std (sec)")
     ws_latency_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -377,6 +441,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_latency_std.append(row)
+    _add_excel_table(ws_latency_std, "LatencyStd", num_data_rows, num_cols, "lower_better")
 
     # Sheet 8: Feature Matrix (if provided)
     if feature_results:
@@ -408,6 +473,7 @@ def save_full_report_excel(
                 else:
                     row.append("-")
             ws_features.append(row)
+        _add_excel_table(ws_features, "Features", len(feature_names), 1 + len(feature_providers))
 
     # Sheet 9: Raw Data
     ws_raw = wb.create_sheet("Raw Data")
@@ -417,6 +483,7 @@ def save_full_report_excel(
     ]
     ws_raw.append(fieldnames)
 
+    raw_row_count = 0
     for provider_name, provider_result in benchmark_result.provider_results.items():
         base_provider, method = _parse_provider_method(provider_name)
 
@@ -433,18 +500,26 @@ def save_full_report_excel(
             ]
             for i, val in enumerate(size_result.upload_throughputs, 1):
                 ws_raw.append(base_row + [i, "upload_mibps", round(val, 3)])
+                raw_row_count += 1
             for i, val in enumerate(size_result.download_throughputs, 1):
                 ws_raw.append(base_row + [i, "download_mibps", round(val, 3)])
+                raw_row_count += 1
             for i, val in enumerate(size_result.latencies, 1):
                 ws_raw.append(base_row + [i, "latency_sec", round(val, 6)])
+                raw_row_count += 1
+    _add_excel_table(ws_raw, "RawData", raw_row_count, len(fieldnames))
 
     # Sheet 10: Errors
     ws_errors = wb.create_sheet("Errors")
     ws_errors.append(["Provider", "Method", "Error"])
+    error_count = 0
     for provider_name, provider_result in benchmark_result.provider_results.items():
         base_provider, method = _parse_provider_method(provider_name)
         for error in provider_result.errors:
             ws_errors.append([base_provider, method, error])
+            error_count += 1
+    if error_count > 0:
+        _add_excel_table(ws_errors, "Errors", error_count, 3)
 
     wb.save(excel_path)
     return excel_path
