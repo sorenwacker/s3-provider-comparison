@@ -12,6 +12,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table as ExcelTable, TableStyleInfo
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
@@ -235,7 +236,7 @@ def save_results_excel(result: BenchmarkResult) -> Path:
     return excel_path
 
 
-def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_type: str = None):
+def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_type: str = None, title: str = None):
     """Add Excel table definition and optional heatmap to worksheet.
 
     Args:
@@ -244,6 +245,7 @@ def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_
         num_rows: Number of data rows (excluding header)
         num_cols: Total number of columns
         heatmap_type: 'higher_better' (green=high), 'lower_better' (green=low), or None
+        title: Optional title to display below the table
     """
     if num_rows < 1:
         return
@@ -286,6 +288,12 @@ def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_
                 end_type="max", end_color="F8696B",  # Red
             )
         ws.conditional_formatting.add(data_range, rule)
+
+    # Add title below table
+    if title:
+        title_row = end_row + 2  # Skip one row after table
+        title_cell = ws.cell(row=title_row, column=1, value=title)
+        title_cell.font = Font(italic=True, color="666666")
 
 
 def save_full_report_excel(
@@ -366,7 +374,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_upload.append(row)
-    _add_excel_table(ws_upload, "UploadMean", num_data_rows, num_cols, "higher_better")
+    _add_excel_table(ws_upload, "UploadMean", num_data_rows, num_cols, "higher_better", "Upload Throughput Mean (MiB/s)")
 
     # Sheet 3: Upload Throughput - std
     ws_upload_std = wb.create_sheet("Upload Std (MiBps)")
@@ -381,7 +389,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_upload_std.append(row)
-    _add_excel_table(ws_upload_std, "UploadStd", num_data_rows, num_cols, "lower_better")
+    _add_excel_table(ws_upload_std, "UploadStd", num_data_rows, num_cols, "lower_better", "Upload Throughput Std Dev (MiB/s)")
 
     # Sheet 4: Download Throughput (MiB/s) - mean
     ws_download = wb.create_sheet("Download Mean (MiBps)")
@@ -396,7 +404,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_download.append(row)
-    _add_excel_table(ws_download, "DownloadMean", num_data_rows, num_cols, "higher_better")
+    _add_excel_table(ws_download, "DownloadMean", num_data_rows, num_cols, "higher_better", "Download Throughput Mean (MiB/s)")
 
     # Sheet 5: Download Throughput - std
     ws_download_std = wb.create_sheet("Download Std (MiBps)")
@@ -411,7 +419,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_download_std.append(row)
-    _add_excel_table(ws_download_std, "DownloadStd", num_data_rows, num_cols, "lower_better")
+    _add_excel_table(ws_download_std, "DownloadStd", num_data_rows, num_cols, "lower_better", "Download Throughput Std Dev (MiB/s)")
 
     # Sheet 6: Latency (sec) - mean
     ws_latency = wb.create_sheet("Latency Mean (sec)")
@@ -426,7 +434,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_latency.append(row)
-    _add_excel_table(ws_latency, "LatencyMean", num_data_rows, num_cols, "lower_better")
+    _add_excel_table(ws_latency, "LatencyMean", num_data_rows, num_cols, "lower_better", "Latency / TTFB Mean (seconds)")
 
     # Sheet 7: Latency - std
     ws_latency_std = wb.create_sheet("Latency Std (sec)")
@@ -441,7 +449,7 @@ def save_full_report_excel(
             else:
                 row.append("")
         ws_latency_std.append(row)
-    _add_excel_table(ws_latency_std, "LatencyStd", num_data_rows, num_cols, "lower_better")
+    _add_excel_table(ws_latency_std, "LatencyStd", num_data_rows, num_cols, "lower_better", "Latency / TTFB Std Dev (seconds)")
 
     # Sheet 8: Feature Matrix (if provided)
     if feature_results:
@@ -473,7 +481,7 @@ def save_full_report_excel(
                 else:
                     row.append("-")
             ws_features.append(row)
-        _add_excel_table(ws_features, "Features", len(feature_names), 1 + len(feature_providers))
+        _add_excel_table(ws_features, "Features", len(feature_names), 1 + len(feature_providers), None, "S3 API Feature Support Matrix")
 
     # Sheet 9: Raw Data
     ws_raw = wb.create_sheet("Raw Data")
@@ -507,7 +515,7 @@ def save_full_report_excel(
             for i, val in enumerate(size_result.latencies, 1):
                 ws_raw.append(base_row + [i, "latency_sec", round(val, 6)])
                 raw_row_count += 1
-    _add_excel_table(ws_raw, "RawData", raw_row_count, len(fieldnames))
+    _add_excel_table(ws_raw, "RawData", raw_row_count, len(fieldnames), None, "Raw Benchmark Data (individual iterations)")
 
     # Sheet 10: Errors
     ws_errors = wb.create_sheet("Errors")
@@ -519,7 +527,7 @@ def save_full_report_excel(
             ws_errors.append([base_provider, method, error])
             error_count += 1
     if error_count > 0:
-        _add_excel_table(ws_errors, "Errors", error_count, 3)
+        _add_excel_table(ws_errors, "Errors", error_count, 3, None, "Benchmark Errors")
 
     wb.save(excel_path)
     return excel_path
