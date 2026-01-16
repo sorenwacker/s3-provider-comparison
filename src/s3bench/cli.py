@@ -354,7 +354,7 @@ def save_full_report_excel(
     num_cols = 2 + len(all_sizes)  # Provider, Method + sizes
 
     # Sheet 2: Upload Throughput (MiB/s) - mean
-    ws_upload = wb.create_sheet("Upload Mean (MiB/s)")
+    ws_upload = wb.create_sheet("Upload Mean (MiBps)")
     ws_upload.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -369,7 +369,7 @@ def save_full_report_excel(
     _add_excel_table(ws_upload, "UploadMean", num_data_rows, num_cols, "higher_better")
 
     # Sheet 3: Upload Throughput - std
-    ws_upload_std = wb.create_sheet("Upload Std (MiB/s)")
+    ws_upload_std = wb.create_sheet("Upload Std (MiBps)")
     ws_upload_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -384,7 +384,7 @@ def save_full_report_excel(
     _add_excel_table(ws_upload_std, "UploadStd", num_data_rows, num_cols, "lower_better")
 
     # Sheet 4: Download Throughput (MiB/s) - mean
-    ws_download = wb.create_sheet("Download Mean (MiB/s)")
+    ws_download = wb.create_sheet("Download Mean (MiBps)")
     ws_download.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
@@ -399,7 +399,7 @@ def save_full_report_excel(
     _add_excel_table(ws_download, "DownloadMean", num_data_rows, num_cols, "higher_better")
 
     # Sheet 5: Download Throughput - std
-    ws_download_std = wb.create_sheet("Download Std (MiB/s)")
+    ws_download_std = wb.create_sheet("Download Std (MiBps)")
     ws_download_std.append(["Provider", "Method"] + [size_header(s) for s in all_sizes])
     for (provider, method) in sorted_keys:
         pr = grouped[(provider, method)]
