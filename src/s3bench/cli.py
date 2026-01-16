@@ -839,9 +839,63 @@ def _display_results(result, categories: list[str]) -> None:
                 console.print(f"  - {error}")
 
 
+def _load_benchmark_result(data: dict) -> BenchmarkResult:
+    """Load a BenchmarkResult from JSON data."""
+    from s3bench.benchmark import SizeResult, ProviderResult
+
+    timestamp = datetime.fromisoformat(data["timestamp"])
+    result = BenchmarkResult(timestamp=timestamp)
+
+    for provider_name, provider_data in data.get("providers", {}).items():
+        pr = ProviderResult(provider_name=provider_name)
+        pr.errors = provider_data.get("errors", [])
+
+        # Handle both "size_results" (current) and "sizes" (legacy) keys
+        size_results = provider_data.get("size_results", provider_data.get("sizes", {}))
+        for size_str, size_data in size_results.items():
+            size_bytes = int(size_str)
+            sr = SizeResult(size_bytes=size_bytes)
+            sr.upload_throughputs = size_data.get("upload_throughputs", [])
+            sr.download_throughputs = size_data.get("download_throughputs", [])
+            sr.latencies = size_data.get("latencies", [])
+            pr.size_results[size_bytes] = sr
+
+        result.provider_results[provider_name] = pr
+
+    return result
+
+
+def _infer_categories_from_result(result: BenchmarkResult) -> list[str]:
+    """Infer size categories from a benchmark result."""
+    from s3bench.benchmark import FileSize
+
+    # Collect all size bytes from the result
+    all_sizes = set()
+    for pr in result.provider_results.values():
+        all_sizes.update(pr.size_results.keys())
+
+    # Map to categories
+    categories = set()
+    for size in FileSize:
+        if size.value in all_sizes:
+            if size.name.startswith("SMALL_"):
+                categories.add("small")
+            elif size.name.startswith("MEDIUM_"):
+                categories.add("medium")
+            elif size.name.startswith("LARGE_"):
+                categories.add("large")
+            elif size.name.startswith("XLARGE_"):
+                categories.add("xlarge")
+
+    # Return in order
+    order = ["small", "medium", "large", "xlarge"]
+    return [c for c in order if c in categories]
+
+
 @app.command("results")
 def results(
     last: Annotated[int, typer.Option("--last", "-n", help="Show last N results")] = 5,
+    show: Annotated[bool, typer.Option("--show", "-s", help="Display benchmark tables from last result")] = False,
 ) -> None:
     """List past benchmark results."""
     results_dir = get_results_dir()
@@ -849,6 +903,21 @@ def results(
 
     if not files:
         console.print("No benchmark results found.")
+        return
+
+    if show:
+        # Load and display the last result
+        with open(files[0]) as fp:
+            data = json.load(fp)
+
+        # Reconstruct BenchmarkResult from JSON
+        result = _load_benchmark_result(data)
+
+        # Determine categories from the sizes in the data
+        categories = _infer_categories_from_result(result)
+
+        console.print(f"[dim]Results from: {files[0].name}[/]\n")
+        _display_results(result, categories)
         return
 
     table = Table(title="Benchmark Results")
@@ -865,6 +934,7 @@ def results(
 
     console.print(table)
     console.print(f"\nResults stored in: [dim]{results_dir}[/]")
+    console.print("[dim]Use --show to display the last benchmark tables[/]")
 
 
 def _save_features_excel(all_results: dict) -> Path:
