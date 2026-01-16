@@ -166,7 +166,8 @@ def save_results_csv(result: BenchmarkResult) -> Path:
 
 def get_excel_path() -> Path:
     """Get the Excel results file path."""
-    return get_results_dir() / "benchmarks.xlsx"
+    date_str = datetime.now().strftime("%y%m%d")
+    return get_results_dir() / f"{date_str}-benchmarks.xlsx"
 
 
 def save_results_excel(result: BenchmarkResult) -> Path:
