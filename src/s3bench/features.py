@@ -513,7 +513,7 @@ def test_prefix_policy(provider: Any) -> FeatureResult:
         if result.get("note"):
             # Azure case: SAS cannot do prefix restriction
             if result.get("allowed_access"):
-                return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, result["note"])
+                return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, result["note"])
             else:
                 return FeatureResult(feature_name, FeatureStatus.ERROR, "Token not working")
 
@@ -546,7 +546,7 @@ def test_bucket_policy(provider: Any) -> FeatureResult:
     try:
         # Azure uses RBAC/SAS, not bucket policies
         if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
-            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC/SAS")
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "Azure uses RBAC/SAS")
 
         # Try to get current bucket policy
         try:
@@ -578,7 +578,7 @@ def test_acl(provider: Any) -> FeatureResult:
     try:
         # Azure uses RBAC/SAS, not ACLs
         if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
-            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC/SAS")
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "Azure uses RBAC/SAS")
 
         # Try to get bucket ACL
         response = provider.client.get_bucket_acl(Bucket=provider.bucket)
@@ -604,20 +604,15 @@ def test_iam_api(provider: Any) -> FeatureResult:
     try:
         # Azure uses RBAC, not IAM
         if not hasattr(provider, 'client') or hasattr(provider, 'container_client'):
-            return FeatureResult(feature_name, FeatureStatus.NOT_APPLICABLE, "Azure uses RBAC")
+            return FeatureResult(feature_name, FeatureStatus.NOT_SUPPORTED, "Azure uses RBAC")
 
         import boto3
 
-        # Determine IAM endpoint based on provider
-        endpoint_url = getattr(provider.config, 'endpoint_url', None)
-        iam_endpoint = None
-
-        if endpoint_url:
-            # Wasabi uses separate IAM endpoint
-            if "wasabi" in endpoint_url.lower():
-                iam_endpoint = "https://iam.wasabisys.com"
-            # Other S3-compatible may not have IAM
-            else:
+        # Determine IAM endpoint from config or fall back to S3 endpoint
+        iam_endpoint = getattr(provider.config, 'iam_endpoint', None)
+        if not iam_endpoint:
+            endpoint_url = getattr(provider.config, 'endpoint_url', None)
+            if endpoint_url:
                 # Try same endpoint - some providers expose IAM on same host
                 iam_endpoint = endpoint_url.rstrip('/').replace(':443', '')
 
@@ -630,10 +625,7 @@ def test_iam_api(provider: Any) -> FeatureResult:
             "aws_secret_access_key": provider.config.secret_key.get_secret_value(),
             "config": BotoConfig(signature_version="v4"),
         }
-        # Wasabi IAM requires us-east-1 region
-        if iam_endpoint and "wasabi" in iam_endpoint.lower():
-            iam_kwargs["region_name"] = "us-east-1"
-        elif provider.config.region:
+        if provider.config.region:
             iam_kwargs["region_name"] = provider.config.region
         if iam_endpoint:
             iam_kwargs["endpoint_url"] = iam_endpoint
@@ -686,6 +678,26 @@ FEATURE_TESTS: dict[str, Callable] = {
     "iam_api": test_iam_api,
     "sts_credentials": test_sts_credentials,
     "prefix_policy": test_prefix_policy,
+}
+
+# Feature descriptions for display
+FEATURE_DESCRIPTIONS: dict[str, str] = {
+    "Presigned GET": "Generate time-limited URLs for unauthenticated downloads",
+    "Presigned PUT": "Generate time-limited URLs for unauthenticated uploads",
+    "Multipart Upload": "Upload large files in parts for reliability and parallelism",
+    "Byte-range GET": "Download partial file content using HTTP Range header",
+    "Server-side Copy": "Copy objects within the provider without re-uploading",
+    "HEAD Request": "Retrieve object metadata without downloading content",
+    "Custom Metadata": "Attach custom key-value pairs to objects",
+    "Object Tagging": "Assign searchable tags to objects for organization",
+    "Conditional GET": "Use ETag/If-None-Match for cache validation",
+    "Versioning": "Keep multiple versions of objects in the bucket",
+    "Lifecycle Rules": "Auto-delete or transition objects based on age",
+    "Bucket Policy": "JSON policies for fine-grained bucket access control",
+    "ACL": "Access Control Lists for object/bucket permissions (legacy)",
+    "IAM API": "AWS-compatible API for programmatic user/policy management",
+    "STS Temp Credentials": "Generate short-lived credentials via Security Token Service",
+    "STS Prefix Policy": "Scope temporary credentials to specific object prefixes",
 }
 
 

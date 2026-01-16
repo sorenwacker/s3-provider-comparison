@@ -17,7 +17,7 @@ from s3bench import config as cfg
 from s3bench.config import ProviderType
 from s3bench.benchmark import run_benchmark, DEFAULT_ITERATIONS, BenchmarkResult
 from s3bench.providers import create_provider
-from s3bench.features import run_feature_tests, FEATURE_TESTS, FeatureStatus
+from s3bench.features import run_feature_tests, FEATURE_TESTS, FEATURE_DESCRIPTIONS, FeatureStatus
 from s3bench.rclone import create_rclone_provider, check_rclone_installed
 from s3bench.s5cmd import create_s5cmd_provider, check_s5cmd_installed
 
@@ -467,6 +467,9 @@ def provider_add(
     endpoint_url: Annotated[
         Optional[str], typer.Option("--endpoint", "-e", help="Custom endpoint URL")
     ] = None,
+    iam_endpoint: Annotated[
+        Optional[str], typer.Option("--iam-endpoint", help="IAM API endpoint (for credential vending)")
+    ] = None,
     region: Annotated[Optional[str], typer.Option("--region", "-r", help="Region")] = None,
     provider_type: Annotated[
         ProviderType, typer.Option("--type", "-t", help="Provider type (s3 or azure)")
@@ -479,6 +482,7 @@ def provider_add(
         access_key=access_key,
         secret_key=secret_key,
         endpoint_url=endpoint_url,
+        iam_endpoint=iam_endpoint,
         region=region,
         provider_type=provider_type,
     )
@@ -866,7 +870,8 @@ def _save_features_excel(all_results: dict) -> Path:
     """Save feature test results to Excel."""
     from datetime import datetime
 
-    excel_path = get_results_dir() / "features.xlsx"
+    date_str = datetime.now().strftime("%y%m%d")
+    excel_path = get_results_dir() / f"{date_str}-features.xlsx"
 
     wb = Workbook()
     ws = wb.active
@@ -881,7 +886,7 @@ def _save_features_excel(all_results: dict) -> Path:
     provider_names = list(all_results.keys())
 
     # Header row
-    ws.append(["Feature"] + provider_names)
+    ws.append(["Feature"] + provider_names + ["Description"])
 
     # Data rows
     for feature in feature_names:
@@ -903,11 +908,9 @@ def _save_features_excel(all_results: dict) -> Path:
                     row.append("-")
             else:
                 row.append("-")
+        # Add description as last column
+        row.append(FEATURE_DESCRIPTIONS.get(feature, ""))
         ws.append(row)
-
-    # Add timestamp
-    ws.append([])
-    ws.append(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
 
     wb.save(excel_path)
     return excel_path
@@ -1001,7 +1004,7 @@ def features(
     else:
         _display_feature_results(all_results)
 
-    console.print(f"\nResults saved to: [dim]{excel_path}[/]")
+    console.print(f"\nResults saved to: [cyan]{excel_path}[/]")
 
 
 def _display_feature_results(all_results: dict) -> None:
@@ -1019,6 +1022,8 @@ def _display_feature_results(all_results: dict) -> None:
     provider_names = list(all_results.keys())
     for name in provider_names:
         table.add_column(name, justify="center")
+
+    table.add_column("Description", style="dim")
 
     # Add rows
     for feature_name in feature_names:
@@ -1038,6 +1043,9 @@ def _display_feature_results(all_results: dict) -> None:
             else:
                 cell = "-"
             row.append(cell)
+        # Add description as last column
+        description = FEATURE_DESCRIPTIONS.get(feature_name, "")
+        row.append(description)
         table.add_row(*row)
 
     console.print()

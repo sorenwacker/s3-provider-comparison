@@ -20,6 +20,7 @@ class ProviderConfig(BaseModel):
 
     provider_type: ProviderType = ProviderType.S3
     endpoint_url: Optional[str] = None
+    iam_endpoint: Optional[str] = None
     region: Optional[str] = None
     access_key: SecretStr
     secret_key: SecretStr
@@ -79,6 +80,7 @@ def add_provider(
     access_key: str,
     secret_key: str,
     endpoint_url: Optional[str] = None,
+    iam_endpoint: Optional[str] = None,
     region: Optional[str] = None,
     provider_type: ProviderType = ProviderType.S3,
     config_path: Optional[Path] = None,
@@ -88,6 +90,7 @@ def add_provider(
     config.providers[name] = ProviderConfig(
         provider_type=provider_type,
         endpoint_url=endpoint_url,
+        iam_endpoint=iam_endpoint,
         region=region,
         access_key=SecretStr(access_key),
         secret_key=SecretStr(secret_key),
