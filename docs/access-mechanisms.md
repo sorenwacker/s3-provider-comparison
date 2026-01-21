@@ -2,6 +2,69 @@
 
 This document describes different mechanisms for granting users access to specific files in S3-compatible object storage.
 
+## Background: What is S3 and Object Storage?
+
+### Object Storage
+
+Traditional file systems (like a computer's hard drive) organize files in folders and subfolders. **Object storage** takes a different approach: it stores files as independent "objects" in a flat structure, each identified by a unique key (similar to a web address).
+
+A useful analogy is a massive warehouse where every item has a unique barcode. Instead of navigating through rooms and shelves (folders), the system retrieves items directly by their barcode (object key).
+
+### What is S3?
+
+**S3** (Simple Storage Service) is Amazon's object storage service, launched in 2006. It became so widely adopted that "S3" and "S3-compatible" have become industry standards. Many cloud providers (Wasabi, Backblaze, MinIO, Exoscale, and others) offer storage services that speak the same "language" (API) as Amazon S3, allowing applications to switch providers with minimal code changes.
+
+### Key Terminology
+
+| Term | Definition |
+|------|------------|
+| **Bucket** | A container for objects, similar to a top-level folder. Each bucket has a globally unique name. |
+| **Object** | A file stored in a bucket, consisting of data, metadata, and a unique key. |
+| **Key** | The unique identifier for an object within a bucket (e.g., `users/alice/profile.jpg`). Keys can contain slashes to simulate folder structures. |
+| **Prefix** | A partial key used to group related objects (e.g., `users/alice/` matches all of Alice's files). |
+| **Credentials** | The access key ID and secret access key used to authenticate requests. |
+| **IAM** | Identity and Access Management - the system for managing users, groups, and their permissions. |
+| **STS** | Security Token Service - a service that issues temporary, limited-privilege credentials. |
+
+### Why Access Control Matters
+
+By default, objects in S3 are private - only the bucket owner can access them. In real-world applications, common requirements include:
+
+- Allowing users to download files without exposing the owner's credentials
+- Letting users upload files directly to storage (bypassing the application server)
+- Give different users access to different subsets of files
+- Grant temporary access that automatically expires
+- Enable other services or applications to access specific resources
+
+The mechanisms described below solve these problems in different ways, each with its own trade-offs between security, flexibility, and complexity.
+
+### Choosing an Access Mechanism: Quick Guide
+
+```mermaid
+flowchart TD
+    Start([Requirement]) --> Q1{Share a specific<br/>file temporarily?}
+    Q1 -->|Yes| Presigned[Use Presigned URLs]
+    Q1 -->|No| Q2{Backend service<br/>needs access?}
+    Q2 -->|Yes| Policy[Use Bucket Policies]
+    Q2 -->|No| Q3{Users need their<br/>own isolated folders?}
+    Q3 -->|Yes| Q4{Provider supports STS?}
+    Q4 -->|Yes| STS[Use STS Temp Credentials]
+    Q4 -->|No| IAM[Use IAM API Vending]
+    Q3 -->|No| Presigned
+```
+
+**Sharing a file with someone:**
+Use **Presigned URLs**. Generate a time-limited link that anyone can use to download (or upload) a specific file.
+
+**Backend service needs storage access:**
+Use **Bucket Policies**. Define rules that allow the service's credentials to access specific resources.
+
+**Users need access to their own folder:**
+Use **STS Temporary Credentials** (if supported) or **IAM API Credential Vending**. These create isolated, per-user access to specific prefixes.
+
+**Simplest possible solution:**
+Use **Presigned URLs**. They work everywhere and require no credential distribution to end users.
+
 ## Overview
 
 | Mechanism | Scope | Duration | Provider Support | Use Case |
@@ -14,7 +77,9 @@ This document describes different mechanisms for granting users access to specif
 
 ## 1. Presigned URLs
 
-Presigned URLs are time-limited URLs that grant temporary access to a specific object without requiring credentials from the requester.
+A presigned URL is like a temporary guest pass to a specific file. The server generates a special link that works for a limited time, and anyone with that link can access the file - no login required.
+
+Technically, presigned URLs are time-limited URLs that grant temporary access to a specific object without requiring credentials from the requester.
 
 ### How it works
 
@@ -51,7 +116,9 @@ url = s3_client.generate_presigned_url(
 
 ## 2. Bucket Policies
 
-JSON-based policies attached to buckets that define access rules based on principals, actions, resources, and conditions.
+A bucket policy is like a rule book attached to a storage container. It defines who can do what, and under which conditions. For example: "User X can read any file starting with `reports/`" or "Only requests from IP address Y are allowed."
+
+Technically, bucket policies are JSON-based rules attached to buckets that define access based on principals (who), actions (what they can do), resources (which files), and conditions (under what circumstances).
 
 ### How it works
 
@@ -82,7 +149,9 @@ JSON-based policies attached to buckets that define access rules based on princi
 
 ## 3. Access Control Lists (ACL)
 
-Legacy mechanism for granting permissions to predefined groups or specific accounts.
+ACLs are like simple permission tags you can attach to individual files or buckets. They answer basic questions like "Is this file public?" or "Can authenticated users read this?" ACLs are an older approach and have largely been replaced by bucket policies for new projects.
+
+Technically, ACLs are a legacy mechanism for granting permissions to predefined groups or specific accounts.
 
 ### How it works
 
@@ -107,7 +176,9 @@ Legacy mechanism for granting permissions to predefined groups or specific accou
 
 ## 4. STS Temporary Credentials
 
-Security Token Service (STS) issues short-lived credentials scoped to specific permissions.
+STS is like a vending machine for temporary access badges. An application requests a badge with specific permissions (e.g., "can access files in Alice's folder for 1 hour"), and STS issues temporary credentials that automatically stop working after the time limit. This is useful for giving users direct access to storage without sharing the main credentials.
+
+Technically, Security Token Service (STS) issues short-lived credentials scoped to specific permissions.
 
 ### How it works
 
@@ -154,6 +225,8 @@ response = sts_client.assume_role(
 
 ## 5. IAM API Credential Vending
 
+When a provider does not support STS (temporary credentials), it is possible to build a custom "credential vending machine." The application creates actual user accounts on-demand through the provider's API, assigns them limited permissions, and hands out those credentials. This approach is more complex than STS but works on providers that lack temporary credential support.
+
 For providers without STS, a credential vending service can create/manage IAM users programmatically.
 
 ### How it works
@@ -166,14 +239,14 @@ For providers without STS, a credential vending service can create/manage IAM us
 
 ### Architecture
 
-```
-User -> Identity Provider (JWT) -> Credential Vending API -> Provider IAM API
-                                          |
-                                          v
-                                   IAM User + Policy
-                                          |
-                                          v
-                                   Access Key + Secret
+```mermaid
+flowchart LR
+    User([User]) --> IdP[Identity Provider]
+    IdP -->|JWT Token| CVA[Credential Vending API]
+    CVA -->|Create User| IAM[Provider IAM API]
+    IAM --> Policy[IAM User + Policy]
+    Policy --> Creds[Access Key + Secret]
+    Creds -->|Returned to| User
 ```
 
 ### Provider-specific IAM APIs
