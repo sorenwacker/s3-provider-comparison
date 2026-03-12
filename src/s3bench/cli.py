@@ -666,17 +666,25 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
                 provider_methods.add((provider, method))
     sorted_pm = sorted(provider_methods, key=lambda x: (x[1], x[0]))  # Sort by method first, then provider
 
-    # Sheet 1: Summary - providers as rows, (size, metric) as columns for easy comparison
+    # Sheet 1: Summary - providers as rows, grouped columns: all uploads, all downloads, all latencies
     ws_summary = wb.active
     ws_summary.title = "Summary"
 
-    # Build header: Provider | Method | 1KB Up | 1KB Down | 1KB Lat | 10KB Up | ...
+    # Build header: Provider | Method | 1KB Up (MiBps) | ... | 1KB Down (MiBps) | ... | 1KB Lat (sec) | ...
     header = ["Provider", "Method"]
-    col_types = []  # Track column types for heatmaps: 'upload', 'download', 'latency'
+    col_types = []  # Track column types for heatmaps
     for size_bytes in sorted_sizes:
         size_label = data["size_labels"].get(size_bytes, size_bytes)
-        header.extend([f"{size_label} Up", f"{size_label} Down", f"{size_label} Lat"])
-        col_types.extend(["upload", "download", "latency"])
+        header.append(f"{size_label} Up (MiBps)")
+        col_types.append("upload")
+    for size_bytes in sorted_sizes:
+        size_label = data["size_labels"].get(size_bytes, size_bytes)
+        header.append(f"{size_label} Down (MiBps)")
+        col_types.append("download")
+    for size_bytes in sorted_sizes:
+        size_label = data["size_labels"].get(size_bytes, size_bytes)
+        header.append(f"{size_label} Lat (sec)")
+        col_types.append("latency")
     ws_summary.append(header)
 
     # Build data rows - one row per (provider, method)
@@ -684,6 +692,8 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
     for provider, method in sorted_pm:
         row = [provider, method]
 
+        # Collect averages per size
+        size_avgs = {}
         for size_bytes in sorted_sizes:
             upload_vals = []
             download_vals = []
@@ -703,10 +713,21 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
                     if "latency_sec" in metrics:
                         latency_vals.append(metrics["latency_sec"])
 
-            avg_upload = round(statistics.mean(upload_vals), 2) if upload_vals else ""
-            avg_download = round(statistics.mean(download_vals), 2) if download_vals else ""
-            avg_latency = round(statistics.mean(latency_vals), 4) if latency_vals else ""
-            row.extend([avg_upload, avg_download, avg_latency])
+            size_avgs[size_bytes] = {
+                "upload": round(statistics.mean(upload_vals), 2) if upload_vals else "",
+                "download": round(statistics.mean(download_vals), 2) if download_vals else "",
+                "latency": round(statistics.mean(latency_vals), 4) if latency_vals else "",
+            }
+
+        # Add all uploads first
+        for size_bytes in sorted_sizes:
+            row.append(size_avgs[size_bytes]["upload"])
+        # Then all downloads
+        for size_bytes in sorted_sizes:
+            row.append(size_avgs[size_bytes]["download"])
+        # Then all latencies
+        for size_bytes in sorted_sizes:
+            row.append(size_avgs[size_bytes]["latency"])
 
         ws_summary.append(row)
         summary_rows += 1
