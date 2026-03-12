@@ -110,6 +110,105 @@ def get_csv_path() -> Path:
     return get_results_dir() / "benchmarks.csv"
 
 
+def load_historical_data(
+    from_date: str = None,
+    to_date: str = None,
+    providers: list[str] = None
+) -> dict:
+    """Load historical benchmark data from CSV, grouped by date.
+
+    Args:
+        from_date: Start date filter (YYYY-MM-DD format)
+        to_date: End date filter (YYYY-MM-DD format)
+        providers: List of provider names to filter
+
+    Returns:
+        dict with keys:
+            - dates: sorted list of unique dates
+            - providers: set of unique providers
+            - sizes: set of unique size_bytes values
+            - size_labels: dict mapping size_bytes -> size_label
+            - grouped: nested dict [date][provider][method][size_bytes][metric] = mean_value
+            - raw: list of all raw CSV rows (filtered)
+    """
+    import statistics
+
+    csv_path = get_csv_path()
+
+    result = {
+        "dates": [],
+        "providers": set(),
+        "sizes": set(),
+        "size_labels": {},
+        "grouped": {},
+        "raw": [],
+    }
+
+    if not csv_path.exists():
+        return result
+
+    # Read and filter CSV data
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    # Filter by date range
+    if from_date:
+        rows = [r for r in rows if r["date"] >= from_date]
+    if to_date:
+        rows = [r for r in rows if r["date"] <= to_date]
+
+    # Filter by providers
+    if providers:
+        providers_set = set(providers)
+        rows = [r for r in rows if r["provider"] in providers_set]
+
+    if not rows:
+        return result
+
+    result["raw"] = rows
+
+    # Collect unique values
+    dates_set = set()
+    for row in rows:
+        dates_set.add(row["date"])
+        result["providers"].add(row["provider"])
+        result["sizes"].add(row["size_bytes"])
+        result["size_labels"][row["size_bytes"]] = row["size_label"]
+
+    result["dates"] = sorted(dates_set)
+
+    # Group values by (date, provider, method, size_bytes, metric)
+    # to calculate mean across iterations
+    value_groups = {}
+    for row in rows:
+        key = (
+            row["date"],
+            row["provider"],
+            row["method"],
+            row["size_bytes"],
+            row["metric"]
+        )
+        if key not in value_groups:
+            value_groups[key] = []
+        value_groups[key].append(float(row["value"]))
+
+    # Build grouped structure with mean values
+    for (date, provider, method, size_bytes, metric), values in value_groups.items():
+        if date not in result["grouped"]:
+            result["grouped"][date] = {}
+        if provider not in result["grouped"][date]:
+            result["grouped"][date][provider] = {}
+        if method not in result["grouped"][date][provider]:
+            result["grouped"][date][provider][method] = {}
+        if size_bytes not in result["grouped"][date][provider][method]:
+            result["grouped"][date][provider][method][size_bytes] = {}
+
+        result["grouped"][date][provider][method][size_bytes][metric] = statistics.mean(values)
+
+    return result
+
+
 def save_results_csv(result: BenchmarkResult) -> Path:
     """Append benchmark results to CSV file in tidy/long format with individual iterations."""
     csv_path = get_csv_path()
@@ -528,6 +627,173 @@ def save_full_report_excel(
             error_count += 1
     if error_count > 0:
         _add_excel_table(ws_errors, "Errors", error_count, 3, None, "Benchmark Errors")
+
+    wb.save(excel_path)
+    return excel_path
+
+
+def save_historical_report_excel(data: dict, filename: str = None) -> Path:
+    """Save historical benchmark data to Excel report.
+
+    Args:
+        data: Historical data from load_historical_data()
+        filename: Optional output filename
+
+    Returns:
+        Path to created Excel file
+    """
+    import statistics
+
+    date_str = datetime.now().strftime("%y%m%d")
+    if filename:
+        excel_path = get_results_dir() / filename
+    else:
+        excel_path = get_results_dir() / f"{date_str}-history.xlsx"
+
+    wb = Workbook()
+
+    # Get sorted sizes for column headers
+    sorted_sizes = sorted(data["sizes"], key=lambda x: int(x))
+    size_headers = [data["size_labels"].get(s, s) for s in sorted_sizes]
+
+    # Collect all (provider, method) combinations across all dates
+    provider_methods = set()
+    for date_data in data["grouped"].values():
+        for provider, methods in date_data.items():
+            for method in methods:
+                provider_methods.add((provider, method))
+    sorted_pm = sorted(provider_methods, key=lambda x: (x[0], x[1]))
+
+    # Sheet 1: Summary - aggregated across all dates
+    ws_summary = wb.active
+    ws_summary.title = "Summary"
+    ws_summary.append([
+        "Provider", "Method", "Avg Upload (MiBps)", "Avg Download (MiBps)",
+        "Avg Latency (sec)", "Dates Tested", "Total Runs"
+    ])
+
+    summary_rows = 0
+    for provider, method in sorted_pm:
+        upload_vals = []
+        download_vals = []
+        latency_vals = []
+        dates_count = 0
+        runs_count = 0
+
+        for date in data["dates"]:
+            date_data = data["grouped"].get(date, {})
+            provider_data = date_data.get(provider, {})
+            method_data = provider_data.get(method, {})
+
+            if method_data:
+                dates_count += 1
+                for size_bytes, metrics in method_data.items():
+                    runs_count += 1
+                    if "upload_mbps" in metrics:
+                        upload_vals.append(metrics["upload_mbps"])
+                    if "download_mbps" in metrics:
+                        download_vals.append(metrics["download_mbps"])
+                    if "latency_sec" in metrics:
+                        latency_vals.append(metrics["latency_sec"])
+
+        avg_upload = round(statistics.mean(upload_vals), 2) if upload_vals else ""
+        avg_download = round(statistics.mean(download_vals), 2) if download_vals else ""
+        avg_latency = round(statistics.mean(latency_vals), 4) if latency_vals else ""
+
+        ws_summary.append([
+            provider, method, avg_upload, avg_download, avg_latency,
+            dates_count, runs_count
+        ])
+        summary_rows += 1
+
+    if summary_rows > 0:
+        _add_excel_table(ws_summary, "Summary", summary_rows, 7, None, "Historical Summary")
+
+    # Sheet 2: Upload Mean (MiBps) - dates as rows
+    ws_upload = wb.create_sheet("Upload Mean (MiBps)")
+    ws_upload.append(["Date", "Provider", "Method"] + size_headers)
+
+    upload_rows = 0
+    for date in data["dates"]:
+        date_data = data["grouped"].get(date, {})
+        for provider, method in sorted_pm:
+            method_data = date_data.get(provider, {}).get(method, {})
+            if method_data:
+                row = [date, provider, method]
+                for size_bytes in sorted_sizes:
+                    metrics = method_data.get(size_bytes, {})
+                    val = metrics.get("upload_mbps")
+                    row.append(round(val, 2) if val is not None else "")
+                ws_upload.append(row)
+                upload_rows += 1
+
+    if upload_rows > 0:
+        _add_excel_table(
+            ws_upload, "UploadHistory", upload_rows, 3 + len(sorted_sizes),
+            "higher_better", "Upload Throughput Mean (MiB/s)"
+        )
+
+    # Sheet 3: Download Mean (MiBps) - dates as rows
+    ws_download = wb.create_sheet("Download Mean (MiBps)")
+    ws_download.append(["Date", "Provider", "Method"] + size_headers)
+
+    download_rows = 0
+    for date in data["dates"]:
+        date_data = data["grouped"].get(date, {})
+        for provider, method in sorted_pm:
+            method_data = date_data.get(provider, {}).get(method, {})
+            if method_data:
+                row = [date, provider, method]
+                for size_bytes in sorted_sizes:
+                    metrics = method_data.get(size_bytes, {})
+                    val = metrics.get("download_mbps")
+                    row.append(round(val, 2) if val is not None else "")
+                ws_download.append(row)
+                download_rows += 1
+
+    if download_rows > 0:
+        _add_excel_table(
+            ws_download, "DownloadHistory", download_rows, 3 + len(sorted_sizes),
+            "higher_better", "Download Throughput Mean (MiB/s)"
+        )
+
+    # Sheet 4: Latency Mean (sec) - dates as rows
+    ws_latency = wb.create_sheet("Latency Mean (sec)")
+    ws_latency.append(["Date", "Provider", "Method"] + size_headers)
+
+    latency_rows = 0
+    for date in data["dates"]:
+        date_data = data["grouped"].get(date, {})
+        for provider, method in sorted_pm:
+            method_data = date_data.get(provider, {}).get(method, {})
+            if method_data:
+                row = [date, provider, method]
+                for size_bytes in sorted_sizes:
+                    metrics = method_data.get(size_bytes, {})
+                    val = metrics.get("latency_sec")
+                    row.append(round(val, 4) if val is not None else "")
+                ws_latency.append(row)
+                latency_rows += 1
+
+    if latency_rows > 0:
+        _add_excel_table(
+            ws_latency, "LatencyHistory", latency_rows, 3 + len(sorted_sizes),
+            "lower_better", "Latency / TTFB Mean (seconds)"
+        )
+
+    # Sheet 5: Raw Data
+    ws_raw = wb.create_sheet("Raw Data")
+    fieldnames = [
+        "date", "timestamp", "hostname", "ip_address", "provider", "method",
+        "size_bytes", "size_label", "iteration", "metric", "value"
+    ]
+    ws_raw.append(fieldnames)
+
+    for row in data["raw"]:
+        ws_raw.append([row.get(f, "") for f in fieldnames])
+
+    if data["raw"]:
+        _add_excel_table(ws_raw, "RawHistory", len(data["raw"]), len(fieldnames), None, "Raw Historical Data")
 
     wb.save(excel_path)
     return excel_path
@@ -980,9 +1246,32 @@ def results(
     last: Annotated[int, typer.Option("--last", "-n", help="Show last N results")] = 5,
     show: Annotated[bool, typer.Option("--show", "-s", help="Display benchmark tables from last result")] = False,
     export: Annotated[bool, typer.Option("--export", "-e", help="Export last result to summary Excel")] = False,
+    history: Annotated[bool, typer.Option("--history", help="Generate historical report from all past runs")] = False,
+    from_date: Annotated[Optional[str], typer.Option("--from", help="Start date filter (YYYY-MM-DD)")] = None,
+    to_date: Annotated[Optional[str], typer.Option("--to", help="End date filter (YYYY-MM-DD)")] = None,
+    filter_providers: Annotated[Optional[list[str]], typer.Option("--provider", "-p", help="Filter by provider(s)")] = None,
 ) -> None:
     """List past benchmark results."""
     results_dir = get_results_dir()
+
+    if history:
+        # Generate historical report from CSV
+        data = load_historical_data(
+            from_date=from_date,
+            to_date=to_date,
+            providers=filter_providers,
+        )
+
+        if not data["dates"]:
+            console.print("No historical data found in CSV.")
+            return
+
+        excel_path = save_historical_report_excel(data)
+        console.print(f"Historical report generated: [bold]{excel_path}[/]")
+        console.print(f"  Dates: {len(data['dates'])} ({data['dates'][0]} to {data['dates'][-1]})")
+        console.print(f"  Providers: {', '.join(sorted(data['providers']))}")
+        return
+
     files = sorted(results_dir.glob("benchmark_*.json"), reverse=True)
 
     if not files:
@@ -1027,7 +1316,7 @@ def results(
 
     console.print(table)
     console.print(f"\nResults stored in: [dim]{results_dir}[/]")
-    console.print("[dim]Use --show to display tables, --export to generate summary Excel[/]")
+    console.print("[dim]Use --show to display tables, --export for summary Excel, --history for historical report[/]")
 
 
 def _save_features_excel(all_results: dict) -> Path:
