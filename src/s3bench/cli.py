@@ -664,7 +664,7 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
         for provider, methods in date_data.items():
             for method in methods:
                 provider_methods.add((provider, method))
-    sorted_pm = sorted(provider_methods, key=lambda x: (x[1], x[0]))  # Sort by method first, then provider
+    sorted_pm = sorted(provider_methods, key=lambda x: (x[0], x[1]))  # Sort by provider first, then method
 
     # Sheet 1: Summary - providers as rows, grouped columns: all uploads, all downloads, all latencies
     ws_summary = wb.active
@@ -756,6 +756,26 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
                     end_type="max", end_color="F8696B",
                 )
             ws_summary.conditional_formatting.add(col_range, rule)
+
+        # Bold the winner in each column
+        bold_font = Font(bold=True)
+        for col_idx, col_type in enumerate(col_types, start=3):
+            # Collect values and their row numbers
+            values_with_rows = []
+            for row_idx in range(2, end_row + 1):
+                cell = ws_summary.cell(row=row_idx, column=col_idx)
+                if cell.value is not None and cell.value != "":
+                    values_with_rows.append((cell.value, row_idx))
+
+            if values_with_rows:
+                # Find winner: max for upload/download, min for latency
+                if col_type in ("upload", "download"):
+                    winner_val, winner_row = max(values_with_rows, key=lambda x: x[0])
+                else:  # latency
+                    winner_val, winner_row = min(values_with_rows, key=lambda x: x[0])
+
+                # Apply bold to winner cell
+                ws_summary.cell(row=winner_row, column=col_idx).font = bold_font
 
     # Sheet 2: Upload Mean (MiBps) - dates as rows
     ws_upload = wb.create_sheet("Upload Mean (MiBps)")
