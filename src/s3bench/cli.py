@@ -664,7 +664,7 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
         for provider, methods in date_data.items():
             for method in methods:
                 provider_methods.add((provider, method))
-    sorted_pm = sorted(provider_methods, key=lambda x: (x[0], x[1]))
+    sorted_pm = sorted(provider_methods, key=lambda x: (x[1], x[0]))  # Sort by method first, then provider
 
     # Sheet 1: Summary - providers as rows, (size, metric) as columns for easy comparison
     ws_summary = wb.active
