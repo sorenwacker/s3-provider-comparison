@@ -709,6 +709,36 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
     if summary_rows > 0:
         _add_excel_table(ws_summary, "Summary", summary_rows, 7, None, "Historical Summary")
 
+        # Add column-wise heatmaps for metric columns
+        end_row = summary_rows + 1
+        # Upload (col C) - higher is better
+        ws_summary.conditional_formatting.add(
+            f"C2:C{end_row}",
+            ColorScaleRule(
+                start_type="min", start_color="F8696B",
+                mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                end_type="max", end_color="63BE7B",
+            )
+        )
+        # Download (col D) - higher is better
+        ws_summary.conditional_formatting.add(
+            f"D2:D{end_row}",
+            ColorScaleRule(
+                start_type="min", start_color="F8696B",
+                mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                end_type="max", end_color="63BE7B",
+            )
+        )
+        # Latency (col E) - lower is better
+        ws_summary.conditional_formatting.add(
+            f"E2:E{end_row}",
+            ColorScaleRule(
+                start_type="min", start_color="63BE7B",
+                mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                end_type="max", end_color="F8696B",
+            )
+        )
+
     # Sheet 2: Upload Mean (MiBps) - dates as rows
     ws_upload = wb.create_sheet("Upload Mean (MiBps)")
     ws_upload.append(["Date", "Provider", "Method"] + size_headers)
