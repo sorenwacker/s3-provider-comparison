@@ -366,27 +366,29 @@ def _add_excel_table(ws, table_name: str, num_rows: int, num_cols: int, heatmap_
     table.tableStyleInfo = style
     ws.add_table(table)
 
-    # Add heatmap conditional formatting to data columns (skip Provider, Method)
+    # Add heatmap conditional formatting to each data column independently
+    # This ensures each file size is compared only within its own column
     if heatmap_type and num_cols > 2:
-        data_start_col = get_column_letter(3)  # Column C (first data column)
-        data_end_col = get_column_letter(num_cols)
-        data_range = f"{data_start_col}2:{data_end_col}{end_row}"
+        data_start_col_idx = 3  # Column C (first data column)
+        for col_idx in range(data_start_col_idx, num_cols + 1):
+            col_letter = get_column_letter(col_idx)
+            col_range = f"{col_letter}2:{col_letter}{end_row}"
 
-        if heatmap_type == "higher_better":
-            # Green for high values, red for low (throughput)
-            rule = ColorScaleRule(
-                start_type="min", start_color="F8696B",  # Red
-                mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
-                end_type="max", end_color="63BE7B",  # Green
-            )
-        else:  # lower_better
-            # Green for low values, red for high (latency, std)
-            rule = ColorScaleRule(
-                start_type="min", start_color="63BE7B",  # Green
-                mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
-                end_type="max", end_color="F8696B",  # Red
-            )
-        ws.conditional_formatting.add(data_range, rule)
+            if heatmap_type == "higher_better":
+                # Green for high values, red for low (throughput)
+                rule = ColorScaleRule(
+                    start_type="min", start_color="F8696B",  # Red
+                    mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
+                    end_type="max", end_color="63BE7B",  # Green
+                )
+            else:  # lower_better
+                # Green for low values, red for high (latency, std)
+                rule = ColorScaleRule(
+                    start_type="min", start_color="63BE7B",  # Green
+                    mid_type="percentile", mid_value=50, mid_color="FFEB84",  # Yellow
+                    end_type="max", end_color="F8696B",  # Red
+                )
+            ws.conditional_formatting.add(col_range, rule)
 
     # Add title below table
     if title:
