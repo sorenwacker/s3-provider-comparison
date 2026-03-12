@@ -221,6 +221,7 @@ class TestSaveHistoricalReportExcel:
         headers = [cell.value for cell in ws[1]]
         assert "Provider" in headers
         assert "Method" in headers
+        assert "Size" in headers
         assert "Avg Upload (MiBps)" in headers
         assert "Avg Download (MiBps)" in headers
         assert "Avg Latency (sec)" in headers
@@ -300,18 +301,18 @@ class TestSaveHistoricalReportExcel:
                 break
 
     def test_summary_aggregates_across_dates(self, csv_file, temp_results_dir):
-        """Test that Summary sheet aggregates across all dates."""
+        """Test that Summary sheet aggregates across all dates per size."""
         data = load_historical_data()
         excel_path = save_historical_report_excel(data)
 
         wb = load_workbook(excel_path)
         ws = wb["Summary"]
 
-        # Find aws sdk row
+        # Find aws sdk 1KB row (size in column C, dates in column G)
         for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0] == "aws" and row[1] == "sdk":
-                # Dates tested should be 2
-                dates_idx = 5  # "Dates Tested" column
+            if row[0] == "aws" and row[1] == "sdk" and row[2] == "1KB":
+                # Dates tested should be 2 (2026-03-01 and 2026-03-05)
+                dates_idx = 6  # "Dates Tested" column (0-indexed)
                 assert row[dates_idx] == 2
                 break
 

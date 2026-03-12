@@ -666,30 +666,32 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
                 provider_methods.add((provider, method))
     sorted_pm = sorted(provider_methods, key=lambda x: (x[0], x[1]))
 
-    # Sheet 1: Summary - aggregated across all dates
+    # Sheet 1: Summary - aggregated per provider/method/size
     ws_summary = wb.active
     ws_summary.title = "Summary"
     ws_summary.append([
-        "Provider", "Method", "Avg Upload (MiBps)", "Avg Download (MiBps)",
+        "Provider", "Method", "Size", "Avg Upload (MiBps)", "Avg Download (MiBps)",
         "Avg Latency (sec)", "Dates Tested", "Total Runs"
     ])
 
     summary_rows = 0
     for provider, method in sorted_pm:
-        upload_vals = []
-        download_vals = []
-        latency_vals = []
-        dates_count = 0
-        runs_count = 0
+        for size_bytes in sorted_sizes:
+            size_label = data["size_labels"].get(size_bytes, size_bytes)
+            upload_vals = []
+            download_vals = []
+            latency_vals = []
+            dates_count = 0
+            runs_count = 0
 
-        for date in data["dates"]:
-            date_data = data["grouped"].get(date, {})
-            provider_data = date_data.get(provider, {})
-            method_data = provider_data.get(method, {})
+            for date in data["dates"]:
+                date_data = data["grouped"].get(date, {})
+                provider_data = date_data.get(provider, {})
+                method_data = provider_data.get(method, {})
+                metrics = method_data.get(size_bytes, {})
 
-            if method_data:
-                dates_count += 1
-                for size_bytes, metrics in method_data.items():
+                if metrics:
+                    dates_count += 1
                     runs_count += 1
                     if "upload_mbps" in metrics:
                         upload_vals.append(metrics["upload_mbps"])
@@ -698,48 +700,19 @@ def save_historical_report_excel(data: dict, filename: str = None) -> Path:
                     if "latency_sec" in metrics:
                         latency_vals.append(metrics["latency_sec"])
 
-        avg_upload = round(statistics.mean(upload_vals), 2) if upload_vals else ""
-        avg_download = round(statistics.mean(download_vals), 2) if download_vals else ""
-        avg_latency = round(statistics.mean(latency_vals), 4) if latency_vals else ""
+            if upload_vals or download_vals or latency_vals:
+                avg_upload = round(statistics.mean(upload_vals), 2) if upload_vals else ""
+                avg_download = round(statistics.mean(download_vals), 2) if download_vals else ""
+                avg_latency = round(statistics.mean(latency_vals), 4) if latency_vals else ""
 
-        ws_summary.append([
-            provider, method, avg_upload, avg_download, avg_latency,
-            dates_count, runs_count
-        ])
-        summary_rows += 1
+                ws_summary.append([
+                    provider, method, size_label, avg_upload, avg_download, avg_latency,
+                    dates_count, runs_count
+                ])
+                summary_rows += 1
 
     if summary_rows > 0:
-        _add_excel_table(ws_summary, "Summary", summary_rows, 7, None, "Historical Summary")
-
-        # Add column-wise heatmaps for metric columns
-        end_row = summary_rows + 1
-        # Upload (col C) - higher is better
-        ws_summary.conditional_formatting.add(
-            f"C2:C{end_row}",
-            ColorScaleRule(
-                start_type="min", start_color="F8696B",
-                mid_type="percentile", mid_value=50, mid_color="FFEB84",
-                end_type="max", end_color="63BE7B",
-            )
-        )
-        # Download (col D) - higher is better
-        ws_summary.conditional_formatting.add(
-            f"D2:D{end_row}",
-            ColorScaleRule(
-                start_type="min", start_color="F8696B",
-                mid_type="percentile", mid_value=50, mid_color="FFEB84",
-                end_type="max", end_color="63BE7B",
-            )
-        )
-        # Latency (col E) - lower is better
-        ws_summary.conditional_formatting.add(
-            f"E2:E{end_row}",
-            ColorScaleRule(
-                start_type="min", start_color="63BE7B",
-                mid_type="percentile", mid_value=50, mid_color="FFEB84",
-                end_type="max", end_color="F8696B",
-            )
-        )
+        _add_excel_table(ws_summary, "Summary", summary_rows, 8, None, "Historical Summary")
 
     # Sheet 2: Upload Mean (MiBps) - dates as rows
     ws_upload = wb.create_sheet("Upload Mean (MiBps)")
