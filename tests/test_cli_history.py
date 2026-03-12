@@ -217,16 +217,14 @@ class TestSaveHistoricalReportExcel:
         assert "Summary" in wb.sheetnames
 
         ws = wb["Summary"]
-        # Check header row
+        # Check header row - pivoted format with (size, metric) columns
         headers = [cell.value for cell in ws[1]]
         assert "Provider" in headers
         assert "Method" in headers
-        assert "Size" in headers
-        assert "Avg Upload (MiBps)" in headers
-        assert "Avg Download (MiBps)" in headers
-        assert "Avg Latency (sec)" in headers
-        assert "Dates Tested" in headers
-        assert "Total Runs" in headers
+        # Should have size-specific columns like "1KB Up", "1KB Down", "1KB Lat"
+        assert "1KB Up" in headers
+        assert "1KB Down" in headers
+        assert "1KB Lat" in headers
 
     def test_has_upload_sheet(self, csv_file, temp_results_dir):
         """Test that Upload Mean sheet exists."""
@@ -308,12 +306,15 @@ class TestSaveHistoricalReportExcel:
         wb = load_workbook(excel_path)
         ws = wb["Summary"]
 
-        # Find aws sdk 1KB row (size in column C, dates in column G)
+        # Find aws sdk row and check 1KB Upload value
+        headers = [cell.value for cell in ws[1]]
+        kb1_up_idx = headers.index("1KB Up")
+
         for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0] == "aws" and row[1] == "sdk" and row[2] == "1KB":
-                # Dates tested should be 2 (2026-03-01 and 2026-03-05)
-                dates_idx = 6  # "Dates Tested" column (0-indexed)
-                assert row[dates_idx] == 2
+            if row[0] == "aws" and row[1] == "sdk":
+                # 1KB Upload: mean of (10.5, 11.5) from day1 and 12.0 from day2
+                # Day1 mean = 11.0, Day2 = 12.0, overall mean = 11.5
+                assert row[kb1_up_idx] == 11.5
                 break
 
     def test_returns_path_to_created_file(self, csv_file, temp_results_dir):
